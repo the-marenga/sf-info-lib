@@ -1,0 +1,53 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT player_id, level, attributes, last_reported, xp, last_changed\n         FROM player\n         WHERE server_id = $1 AND name = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "player_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "level",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "attributes",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "last_reported",
+        "type_info": "Timestamp"
+      },
+      {
+        "ordinal": 4,
+        "name": "xp",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 5,
+        "name": "last_changed",
+        "type_info": "Timestamp"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "a327e5bd3144f7a05e088966aba1e9fe724ae63da498c30816e4cf1ea9e5d987"
+}

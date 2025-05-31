@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO description (description) VALUES ($1)\n            ON CONFLICT(description)\n            DO UPDATE SET description_id = description.description_id\n            RETURNING description_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "description_id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "fc3e46cf936dd081239c4c3e361c0809700d22e4df5a5fec388d6eed05469a5d"
+}

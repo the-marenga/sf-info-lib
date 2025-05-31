@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM todo_hof_page WHERE server_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8576bf375a5a39595cd8f63f4ae2be54ff2a402e9059701f418b7606979ac2ac"
+}

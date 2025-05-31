@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO otherplayer_resp (otherplayer_resp, hash) VALUES ($1, $2)\n        ON CONFLICT(hash)\n        DO UPDATE SET otherplayer_resp_id = otherplayer_resp.otherplayer_resp_id\n        RETURNING otherplayer_resp_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "otherplayer_resp_id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "c3bb7de08757cd1d3fb43b30a40e13da2558e8abe0e4e6bb572a8f2be25a320b"
+}

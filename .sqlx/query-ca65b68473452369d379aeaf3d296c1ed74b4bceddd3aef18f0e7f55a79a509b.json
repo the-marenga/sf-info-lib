@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT name as player_name, new_count\n        FROM player\n        NATURAL JOIN (\n            SELECT player_id, count(*) as new_count\n            FROM equipment\n            WHERE server_id = $1 AND ident != ALL($2::integer[])\n            GROUP BY player_id\n        ) a\n        WHERE level <= $3 AND attributes <= $4 AND is_removed = false\n        ORDER BY new_count DESC, level ASC, attributes ASC\n        LIMIT $5",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "player_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "new_count",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4Array",
+        "Int4",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "ca65b68473452369d379aeaf3d296c1ed74b4bceddd3aef18f0e7f55a79a509b"
+}

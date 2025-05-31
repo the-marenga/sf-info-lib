@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO server (url, last_hof_crawl)\n        VALUES ($1, $2)\n        ON CONFLICT(url) DO UPDATE SET last_hof_crawl = server.last_hof_crawl\n        RETURNING server_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "server_id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamp"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "fd1f5561e87396110b635a9c67479e76bc190812bf1320e3476fe342e30402c8"
+}

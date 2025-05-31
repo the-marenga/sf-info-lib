@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT description_id\n        FROM description\n        WHERE description = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "description_id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e9edd905049d9ccb67e47c3b3aedd9f1d9a9130c25dafc14c3bb94fb689037bc"
+}

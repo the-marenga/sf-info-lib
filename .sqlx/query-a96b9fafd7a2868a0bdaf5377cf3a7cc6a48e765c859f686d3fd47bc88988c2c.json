@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH cte AS (\n          SELECT server_id\n          FROM server\n          WHERE server_id = $1 AND last_hof_crawl < $2\n        )\n        UPDATE server\n        SET last_hof_crawl = $3\n        WHERE server_id IN (SELECT server_id FROM cte)\n        RETURNING server_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "server_id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Timestamp",
+        "Timestamp"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "a96b9fafd7a2868a0bdaf5377cf3a7cc6a48e765c859f686d3fd47bc88988c2c"
+}

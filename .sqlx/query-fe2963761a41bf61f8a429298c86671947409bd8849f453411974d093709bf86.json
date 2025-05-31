@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH RECURSIVE cnt(x) AS (\n              SELECT 0\n              UNION ALL\n              SELECT x + 1 FROM cnt WHERE x < $1\n            )\n            INSERT INTO todo_hof_page (server_id, idx)\n            SELECT $2, x FROM cnt;\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "fe2963761a41bf61f8a429298c86671947409bd8849f453411974d093709bf86"
+}

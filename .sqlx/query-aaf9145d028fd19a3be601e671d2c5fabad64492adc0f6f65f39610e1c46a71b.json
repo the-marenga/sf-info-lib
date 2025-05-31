@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO guild\n                (server_id, name)\n                VALUES ($1, $2)\n                ON CONFLICT(server_id, name) DO UPDATE SET is_removed = FALSE\n                RETURNING guild_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "guild_id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "aaf9145d028fd19a3be601e671d2c5fabad64492adc0f6f65f39610e1c46a71b"
+}
