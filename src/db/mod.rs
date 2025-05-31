@@ -538,7 +538,7 @@ pub async fn get_hof_pages_to_crawl(
     Ok(pages_to_crawl)
 }
 
-pub async fn report_hof_pages(args: ReportHofArgs) -> Result<(), SFSError> {
+pub async fn insert_hof_pages(args: ReportHofArgs) -> Result<(), SFSError> {
     let db = get_db().await?;
     let server_id = get_server_id(&db, args.server).await?;
 
@@ -585,3 +585,10 @@ pub async fn report_hof_pages(args: ReportHofArgs) -> Result<(), SFSError> {
     }
     Ok(())
 }
+
+// TODO: nude players
+// SELECT name, level, ATTRIBUTES
+// FROM player
+// where equip_count < 3 AND is_removed = false and server_id = 1 and ATTRIBUTES
+// < 9000 and attributes is not null ORDER BY LEVEL desc
+// LIMIT 50;
