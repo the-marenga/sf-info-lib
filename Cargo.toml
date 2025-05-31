@@ -36,5 +36,3 @@ db = [
     "dep:tokio",
     "dep:log",
 ]
-zstd = ["dep:zstd"]
-md5 = ["dep:md5"]
