@@ -19,5 +19,3 @@ SET guild_id = (
 CREATE INDEX idx_player_server_active_honor ON player (server_id, honor DESC, player_id)
 INCLUDE (guild_id, name, level)
 WHERE honor IS NOT NULL AND is_removed = FALSE;
-
-CREATE UNIQUE INDEX player_name_lookup ON player (server_id, lower(name));
