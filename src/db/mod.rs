@@ -151,7 +151,7 @@ pub async fn get_scrapbook_advice(
         .fetch_all(&db)
         .await?;
 
-        if attempt == attempts.len()
+        if attempt - 1  == attempts.len()
             || result
                 .first()
                 .is_some_and(|a| a.new_count.unwrap_or(0) >= good_amount)
