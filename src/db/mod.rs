@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    sync::LazyLock,
+    sync::{Arc, LazyLock},
     time::{Duration, Instant},
 };
 
@@ -107,6 +107,13 @@ pub async fn insert_bug(args: BugReportArgs) -> Result<(), SFSError> {
     Ok(())
 }
 
+struct CacheEntry<T> {
+    result: T,
+    insertion_time: DateTime<Utc>,
+}
+
+type CacheMap<K, V> = LazyLock<RwLock<HashMap<K, V>>>;
+
 /// Returns players, that have a lot of items, that are not yet in the
 /// scrapbook. Evaluating ALL players can be prohibitively slow (> 20 secs),
 /// so we look at progressively larger chunks of the playerbase until we find
@@ -114,13 +121,29 @@ pub async fn insert_bug(args: BugReportArgs) -> Result<(), SFSError> {
 /// cases, especially for new chars
 pub async fn get_scrapbook_advice(
     args: ScrapBookAdviceArgs,
-) -> Result<Vec<ScrapBookAdvice>, SFSError> {
+) -> Result<Arc<[ScrapBookAdvice]>, SFSError> {
+    static RESULT_CACHE: CacheMap<
+        ScrapBookAdviceArgs,
+        CacheEntry<Arc<[ScrapBookAdvice]>>,
+    > = LazyLock::new(|| RwLock::new(HashMap::new()));
+    {
+        let k = RESULT_CACHE.read().await;
+        if let Some(entry) = k.get(&args) {
+            if entry.insertion_time + hours(1) > Utc::now() {
+                log::info!("Skipped sb advice using cache");
+                return Ok(entry.result.clone());
+            }
+        }
+    }
+
     let sb = ScrapBook::parse(&args.raw_scrapbook)
         .ok_or(SFSError::InvalidScrapbook)?;
     let collected: Vec<i32> =
         sb.items.into_iter().map(compress_ident).collect();
+
+    log::info!("New sb query: {}", collected.len());
     let db = get_db().await?;
-    let server_id = get_server_id(&db, args.server).await?;
+    let server_id = get_server_id(&db, args.server.clone()).await?;
 
     let good_amount = match collected.len() {
         ..200 => 9,
@@ -162,7 +185,8 @@ pub async fn get_scrapbook_advice(
                 .is_some_and(|a| a.new_count.unwrap_or(0) >= good_amount)
         {
             if result.is_empty() {
-                return Ok(vec![]);
+                log::warn!("No results for sb query {}", collected.len());
+                return Ok(Arc::default());
             }
             let ids: Vec<_> = result.iter().map(|a| a.player_id).collect();
 
@@ -183,7 +207,7 @@ pub async fn get_scrapbook_advice(
                 now.elapsed()
             );
 
-            return Ok(result
+            let res: Arc<_> = result
                 .into_iter()
                 .filter_map(|a| {
                     Some(ScrapBookAdvice {
@@ -191,7 +215,23 @@ pub async fn get_scrapbook_advice(
                         new_count: a.new_count? as u32,
                     })
                 })
-                .collect());
+                .collect();
+
+            let now = Utc::now();
+            let mut k = RESULT_CACHE.write().await;
+            k.insert(
+                args,
+                CacheEntry {
+                    result: res.clone(),
+                    insertion_time: now,
+                },
+            );
+
+            if fastrand::u64(..10_000) == 0 {
+                k.retain(|_, v| v.insertion_time + hours(1) > now);
+            }
+
+            return Ok(res);
         }
     }
 

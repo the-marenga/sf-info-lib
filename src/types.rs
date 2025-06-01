@@ -37,7 +37,7 @@ pub struct RawOtherPlayer {
     pub fetch_date: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
 pub struct ScrapBookAdviceArgs {
     pub raw_scrapbook: String,
     pub server: String,
