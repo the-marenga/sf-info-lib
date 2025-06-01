@@ -107,7 +107,6 @@ pub async fn insert_bug(args: BugReportArgs) -> Result<(), SFSError> {
     Ok(())
 }
 
-
 /// Returns players, that have a lot of items, that are not yet in the
 /// scrapbook. Evaluating ALL players can be prohibitively slow (> 20 secs),
 /// so we look at progressively larger chunks of the playerbase until we find
@@ -157,7 +156,7 @@ pub async fn get_scrapbook_advice(
         .fetch_all(&db)
         .await?;
 
-        if attempt + 1  == attempts.len()
+        if attempt + 1 == attempts.len()
             || result
                 .first()
                 .is_some_and(|a| a.new_count.unwrap_or(0) >= good_amount)
@@ -697,3 +696,5 @@ pub async fn get_hof_player(
 //     ORDER BY pi.fetch_time DESC
 //     LIMIT 1
 // );
+// CREATE INDEX equipment_lookup_idx ON equipment (server_id, attributes, ident)
+// INCLUDE (player_id);
