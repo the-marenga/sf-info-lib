@@ -41,9 +41,7 @@ pub struct RawOtherPlayer {
 pub struct ScrapBookAdviceArgs {
     pub raw_scrapbook: String,
     pub server: String,
-    pub max_level: u16,
     pub max_attrs: u64,
-    pub result_count: Option<i64>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

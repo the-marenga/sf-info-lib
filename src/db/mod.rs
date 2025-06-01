@@ -113,45 +113,74 @@ pub async fn get_scrapbook_advice(
     let db = get_db().await?;
     let server_id = get_server_id(&db, args.server).await?;
 
-    let mut tx = db.begin().await?;
-    sqlx::query!("SET enable_hashjoin = off")
-        .execute(&mut *tx)
-        .await?;
-    let limit = args.result_count.unwrap_or(25).clamp(1, 25);
+    let good_amount = match collected.len() {
+        ..50 => 10,
+        50..200 => 9,
+        200..500 => 8,
+        _ => 7,
+    };
 
-    let resp = sqlx::query!(
-        "
-        SELECT name as player_name, new_count
-        FROM player
-        NATURAL JOIN (
-            SELECT player_id, count(*) as new_count
+    let attempts = [10_000, 100_000, 1_000_000, 100_000_000];
+    for (attempt, limit) in attempts.into_iter().enumerate() {
+        let result = sqlx::query!(
+            "
+            WITH filtered_equipment AS (
+            SELECT player_id, attributes
             FROM equipment
-            WHERE server_id = $1 AND ident != ALL($2::integer[])
-            GROUP BY player_id
-        ) a
-        WHERE level <= $3 AND attributes <= $4 AND is_removed = false
-        ORDER BY new_count DESC, level ASC, attributes ASC
-        LIMIT $5",
-        server_id,
-        collected.as_slice(),
-        i32::from(args.max_level),
-        args.max_attrs as i64,
-        limit
-    )
-    .fetch_all(&mut *tx)
-    .await?;
+            WHERE server_id = $1
+                AND ident != ALL($2::integer[])
+                AND attributes <= $3
+            order by ATTRIBUTES
+            LIMIT $4
+            )
+            SELECT
+            player_id, count(*) AS new_count, attributes
+            FROM filtered_equipment
+            GROUP BY player_id, attributes
+            ORDER BY new_count DESC, attributes
+            LIMIT 20",
+            server_id,
+            collected.as_slice(),
+            args.max_attrs as i64,
+            limit
+        )
+        .fetch_all(&db)
+        .await?;
 
-    tx.commit().await?;
+        if attempt == attempts.len()
+            || result
+                .first()
+                .is_some_and(|a| a.new_count.unwrap_or(0) >= good_amount)
+        {
+            if result.is_empty() {
+                return Ok(vec![]);
+            }
+            let ids: Vec<_> = result.iter().map(|a| a.player_id).collect();
 
-    Ok(resp
-        .into_iter()
-        .filter_map(|a| {
-            Some(ScrapBookAdvice {
-                player_name: a.player_name,
-                new_count: a.new_count? as u32,
-            })
-        })
-        .collect())
+            let mut names: HashMap<i32, String> = sqlx::query!(
+                "SELECT name, player_id FROM player WHERE player_id = \
+                 ANY($1::integer[])",
+                &ids
+            )
+            .fetch_all(&db)
+            .await?
+            .into_iter()
+            .map(|a| (a.player_id, a.name))
+            .collect();
+
+            return Ok(result
+                .into_iter()
+                .filter_map(|a| {
+                    Some(ScrapBookAdvice {
+                        player_name: names.remove(&a.player_id)?,
+                        new_count: a.new_count? as u32,
+                    })
+                })
+                .collect());
+        }
+    }
+
+    Err(SFSError::Internal("Did not fetch any scrapbook results"))
 }
 
 pub async fn insert_player(
