@@ -1,7 +1,6 @@
 use std::{collections::HashMap, sync::LazyLock, time::Duration};
 
 use chrono::{DateTime, Utc};
-use serde::Deserialize;
 use sf_api::gamestate::{
     ServerTime,
     social::{HallOfFamePlayer, OtherPlayer},
@@ -595,22 +594,6 @@ pub async fn insert_hof_pages(args: ReportHofArgs) -> Result<(), SFSError> {
 // where equip_count < 3 AND is_removed = false and server_id = 1 and ATTRIBUTES
 // < 9000 and attributes is not null ORDER BY LEVEL desc
 // LIMIT 50;
-
-#[derive(Debug, Deserialize)]
-pub struct HofPlayerInfo {
-    pub name: String,
-    pub rank: u32,
-    pub honor: u32,
-    pub level: u32,
-    pub guild: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct GetHofPlayersArgs {
-    pub server: String,
-    pub offset: u32,
-    pub limit: u32,
-}
 
 pub async fn get_hof_player(
     args: GetHofPlayersArgs,

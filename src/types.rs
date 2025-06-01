@@ -46,7 +46,7 @@ pub struct ScrapBookAdviceArgs {
     pub result_count: Option<i64>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "db", derive(sqlx::prelude::FromRow))]
 pub struct ScrapBookAdvice {
     pub player_name: String,
@@ -58,4 +58,20 @@ pub struct ReportHofArgs {
     pub server: String,
     // page => Ranklistplayer
     pub pages: HashMap<u32, String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct HofPlayerInfo {
+    pub name: String,
+    pub rank: u32,
+    pub honor: u32,
+    pub level: u32,
+    pub guild: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct GetHofPlayersArgs {
+    pub server: String,
+    pub offset: u32,
+    pub limit: u32,
 }
