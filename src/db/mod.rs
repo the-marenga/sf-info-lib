@@ -696,5 +696,3 @@ pub async fn get_hof_player(
 //     ORDER BY pi.fetch_time DESC
 //     LIMIT 1
 // );
-// CREATE INDEX equipment_lookup_idx ON equipment (server_id, attributes, ident)
-// INCLUDE (player_id);
