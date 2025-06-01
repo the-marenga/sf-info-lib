@@ -427,7 +427,7 @@ pub async fn insert_player(
         description_id,
         guild_id,
         response_id,
-        other.honor as i32
+        other.honor as i32,
     )
     .execute(&mut *tx)
     .await?;
@@ -438,11 +438,13 @@ pub async fn insert_player(
 
     for ident in equip_idents {
         sqlx::query!(
-            "INSERT INTO equipment (server_id, player_id, ident)
-            VAlUES ($1, $2, $3)",
+            "INSERT INTO equipment (server_id, player_id, ident, attributes)
+            VAlUES ($1, $2, $3, $4)",
             server_id,
             pid,
-            ident
+            ident,
+            // That should be fine
+            attributes as i32
         )
         .execute(&mut *tx)
         .await?;
