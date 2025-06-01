@@ -1,4 +1,8 @@
-use std::{collections::HashMap, sync::LazyLock, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::LazyLock,
+    time::{Duration, Instant},
+};
 
 use chrono::{DateTime, Utc};
 use sf_api::gamestate::{
@@ -114,13 +118,13 @@ pub async fn get_scrapbook_advice(
     let server_id = get_server_id(&db, args.server).await?;
 
     let good_amount = match collected.len() {
-        ..50 => 10,
-        50..200 => 9,
+        ..200 => 9,
         200..500 => 8,
         _ => 7,
     };
 
     let attempts = [10_000, 100_000, 1_000_000, 100_000_000];
+    let now = Instant::now();
     for (attempt, limit) in attempts.into_iter().enumerate() {
         let result = sqlx::query!(
             "
@@ -167,6 +171,12 @@ pub async fn get_scrapbook_advice(
             .into_iter()
             .map(|a| (a.player_id, a.name))
             .collect();
+
+            log::info!(
+                "Request for sb {} took {:?} and {attempt} attempts",
+                collected.len(),
+                now.elapsed()
+            );
 
             return Ok(result
                 .into_iter()
