@@ -1,6 +1,7 @@
 use std::{collections::HashMap, sync::LazyLock, time::Duration};
 
 use chrono::{DateTime, Utc};
+use serde::Deserialize;
 use sf_api::gamestate::{
     ServerTime,
     social::{HallOfFamePlayer, OtherPlayer},
@@ -221,6 +222,39 @@ pub async fn insert_player(
     .fetch_optional(&mut *tx)
     .await?;
 
+    let mut guild_id = None;
+    if let Some(guild) = &player.guild.filter(|a| !a.is_empty()) {
+        let guild_name = guild;
+
+        let mut id = sqlx::query_scalar!(
+            "SELECT guild_id
+            FROM guild
+            WHERE server_id = $1 AND name = $2",
+            server_id,
+            guild_name,
+        )
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        if id.is_none() {
+            id = Some(
+                sqlx::query_scalar!(
+                    "INSERT INTO guild
+                (server_id, name)
+                VALUES ($1, $2)
+                ON CONFLICT(server_id, name) DO UPDATE SET is_removed = FALSE
+                RETURNING guild_id",
+                    server_id,
+                    guild_name,
+                )
+                .fetch_one(&mut *tx)
+                .await?,
+            );
+        }
+
+        guild_id = id;
+    }
+
     let pid = if let Some(existing) = existing {
         if existing.last_reported.is_some_and(|a| a >= fetch_time) {
             log::warn!("Discarded player update for {}", player.name);
@@ -267,7 +301,7 @@ pub async fn insert_player(
             "UPDATE player
             SET level = $1, attributes = $2, next_report_attempt = $3,
                 last_reported = $4, last_changed = $5, equip_count = $6, xp = \
-             $7, honor = $8
+             $7, honor = $8, guild_id = $10
             WHERE player_id = $9",
             i32::from(other.level),
             attributes,
@@ -278,6 +312,7 @@ pub async fn insert_player(
             experience,
             other.honor as i32,
             existing.player_id,
+            guild_id
         )
         .execute(&mut *tx)
         .await?;
@@ -289,8 +324,8 @@ pub async fn insert_player(
         sqlx::query_scalar!(
             "INSERT INTO player
             (server_id, name, level, attributes, next_report_attempt, \
-             last_reported, last_changed, equip_count, xp, honor)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+             last_reported, last_changed, equip_count, xp, honor, guild_id)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
             RETURNING player_id",
             server_id,
             player.name,
@@ -301,44 +336,12 @@ pub async fn insert_player(
             fetch_time,
             equip_count as i16,
             experience,
-            other.honor as i32
+            other.honor as i32,
+            guild_id
         )
         .fetch_one(&mut *tx)
         .await?
     };
-
-    let mut guild_id = None;
-    if let Some(guild) = &player.guild.filter(|a| !a.is_empty()) {
-        let guild_name = guild;
-
-        let mut id = sqlx::query_scalar!(
-            "SELECT guild_id
-            FROM guild
-            WHERE server_id = $1 AND name = $2",
-            server_id,
-            guild_name,
-        )
-        .fetch_optional(&mut *tx)
-        .await?;
-
-        if id.is_none() {
-            id = Some(
-                sqlx::query_scalar!(
-                    "INSERT INTO guild
-                (server_id, name)
-                VALUES ($1, $2)
-                ON CONFLICT(server_id, name) DO UPDATE SET is_removed = FALSE
-                RETURNING guild_id",
-                    server_id,
-                    guild_name,
-                )
-                .fetch_one(&mut *tx)
-                .await?,
-            );
-        }
-
-        guild_id = id;
-    }
 
     let description = player.description.unwrap_or_default();
 
@@ -592,3 +595,60 @@ pub async fn insert_hof_pages(args: ReportHofArgs) -> Result<(), SFSError> {
 // where equip_count < 3 AND is_removed = false and server_id = 1 and ATTRIBUTES
 // < 9000 and attributes is not null ORDER BY LEVEL desc
 // LIMIT 50;
+
+#[derive(Debug, Deserialize)]
+pub struct HofPlayerInfo {
+    pub name: String,
+    pub rank: u32,
+    pub honor: u32,
+    pub level: u32,
+    pub guild: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GetHofPlayersArgs {
+    pub server: String,
+    pub offset: u32,
+    pub limit: u32,
+}
+
+pub async fn get_hof_player(
+    args: GetHofPlayersArgs,
+) -> Result<Vec<HofPlayerInfo>, SFSError> {
+    let db = get_db().await?;
+    let server_id = get_server_id(&db, args.server).await?;
+
+    let players = sqlx::query!(
+        "WITH paginated_players AS (
+            SELECT player.name, guild_id, player.level, player.honor
+            FROM player
+            WHERE server_id = $1
+              AND honor IS NOT NULL
+              AND is_removed = FALSE
+              ORDER BY honor DESC, player_id
+            OFFSET $2
+            LIMIT $3
+        )
+        SELECT p.name as player_name, g.name as guild_name, p.honor, p.level
+        FROM paginated_players p
+        LEFT JOIN guild g ON g.guild_id = p.guild_id
+    ",
+        server_id,
+        args.offset as i32,
+        args.limit.clamp(1, 100) as i32
+    )
+    .fetch_all(&db)
+    .await?;
+
+    Ok(players
+        .into_iter()
+        .enumerate()
+        .map(|(idx, player)| HofPlayerInfo {
+            name: player.player_name,
+            rank: (idx as u32 + args.offset + 1),
+            honor: player.honor.map_or(0, |a| a as u32),
+            level: player.level.map_or(0, |a| a as u32),
+            guild: player.guild_name,
+        })
+        .collect())
+}
