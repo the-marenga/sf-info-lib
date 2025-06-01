@@ -107,6 +107,12 @@ pub async fn insert_bug(args: BugReportArgs) -> Result<(), SFSError> {
     Ok(())
 }
 
+
+/// Returns players, that have a lot of items, that are not yet in the
+/// scrapbook. Evaluating ALL players can be prohibitively slow (> 20 secs),
+/// so we look at progressively larger chunks of the playerbase until we find
+/// a player with "enough" new items. This reduce the time to 15ms-2s in most
+/// cases, especially for new chars
 pub async fn get_scrapbook_advice(
     args: ScrapBookAdviceArgs,
 ) -> Result<Vec<ScrapBookAdvice>, SFSError> {

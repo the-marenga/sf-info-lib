@@ -7,8 +7,6 @@ WITH bad_guilds AS (
 UPDATE player_info
 SET guild_id = NULL WHERE guild_id in (SELECT guild_id FROM bad_guilds);
 
-DELETE FROM guild WHERE NAME = '';
-
 UPDATE player
 SET guild_id = (
     SELECT pi.guild_id
