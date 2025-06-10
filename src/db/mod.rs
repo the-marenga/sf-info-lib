@@ -527,19 +527,16 @@ pub async fn insert_player(
             .execute(&mut *tx)
             .await?;
 
-        for ident in equip_idents {
-            sqlx::query!(
-                "INSERT INTO equipment (server_id, player_id, ident, attributes)
-                VAlUES ($1, $2, $3, $4)",
-                server_id,
-                pid,
-                ident,
-                // That should be fine
-                attributes as i32
-            )
-            .execute(&mut *tx)
-            .await?;
-        }
+        let mut builder = QueryBuilder::new(
+            "INSERT INTO equipment (server_id, player_id, ident, attributes) ",
+        );
+        builder.push_values(equip_idents, |mut b, ident| {
+            b.push_bind(server_id)
+                .push_bind(pid)
+                .push_bind(ident)
+                .push_bind(attributes as i32);
+        });
+        builder.build().execute(&mut *tx).await?;
     }
 
     return Ok(tx.commit().await?);
