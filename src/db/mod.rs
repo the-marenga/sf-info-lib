@@ -662,6 +662,11 @@ pub async fn insert_hof_pages(args: ReportHofArgs) -> Result<(), SFSError> {
             }
             match HallOfFamePlayer::parse(player) {
                 Ok(x) => {
+                    if x.name.chars().all(|a| a.is_ascii_digit()) {
+                        // Looking up these names will actually look up the
+                        // player with that id, which can lead to issues
+                        continue;
+                    }
                     players.push(x);
                 }
                 Err(err) => log::warn!("{err}"),
