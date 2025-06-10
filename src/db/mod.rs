@@ -266,17 +266,29 @@ pub async fn insert_player(
     player_name: String,
     player: RawOtherPlayer,
 ) -> Result<(), SFSError> {
-    let data: Result<Vec<i64>, _> =
-        player.info.trim().split('/').map(|a| a.parse()).collect();
-    let Ok(data) = data else {
-        return Err(SFSError::InvalidPlayer(
-            format!("Could not parse player {player_name}").into(),
-        ));
+    let data: Result<Vec<i64>, _> = player
+        .info
+        .trim()
+        .split('/')
+        .map(|a| a.trim().parse())
+        .collect();
+    let data = match data {
+        Ok(data) => data,
+        Err(e) => {
+            return Err(SFSError::InvalidPlayer(
+                format!("Could not parse player data for {player_name}: {e}")
+                    .into(),
+            ));
+        }
     };
-    let Ok(other) = OtherPlayer::parse(&data, ServerTime::default()) else {
-        return Err(SFSError::InvalidPlayer(
-            format!("Could not parse player {player_name}").into(),
-        ));
+    let other = match OtherPlayer::parse(&data, ServerTime::default()) {
+        Ok(other) => other,
+        Err(e) => {
+            return Err(SFSError::InvalidPlayer(
+                format!("Could not parse other player {player_name}: {e}")
+                    .into(),
+            ));
+        }
     };
     let Ok(mut fetch_time) = DateTime::parse_from_rfc3339(&player.fetch_date)
         .map(|a| a.to_utc().naive_utc())
