@@ -522,23 +522,27 @@ pub async fn insert_player(
     .execute(&mut *tx)
     .await?;
 
-    if has_changed {
-        sqlx::query!("DELETE FROM equipment WHERE player_id = $1", pid)
-            .execute(&mut *tx)
-            .await?;
-
-        let mut builder = QueryBuilder::new(
-            "INSERT INTO equipment (server_id, player_id, ident, attributes) ",
-        );
-        builder.push_values(equip_idents, |mut b, ident| {
-            b.push_bind(server_id)
-                .push_bind(pid)
-                .push_bind(ident)
-                .push_bind(attributes as i32);
-        });
-        builder.build().execute(&mut *tx).await?;
+    if !has_changed {
+        return Ok(tx.commit().await?);
     }
 
+    sqlx::query!("DELETE FROM equipment WHERE player_id = $1", pid)
+        .execute(&mut *tx)
+        .await?;
+    if equip_idents.is_empty() {
+        return Ok(tx.commit().await?);
+    }
+
+    let mut builder = QueryBuilder::new(
+        "INSERT INTO equipment (server_id, player_id, ident, attributes) ",
+    );
+    builder.push_values(equip_idents, |mut b, ident| {
+        b.push_bind(server_id)
+            .push_bind(pid)
+            .push_bind(ident)
+            .push_bind(attributes as i32);
+    });
+    builder.build().execute(&mut *tx).await?;
     return Ok(tx.commit().await?);
 }
 
