@@ -240,10 +240,10 @@ pub async fn get_scrapbook_advice(
 
 pub async fn mark_removed(
     db: &sqlx::Pool<sqlx::Postgres>,
-    args: MarkMissingArgs,
+    server_id: i32,
+    player_name: String,
 ) -> Result<(), SFSError> {
-    let server_id = get_server_id(db, args.server).await?;
-    if args.player.is_empty() {
+    if player_name.is_empty() {
         return Ok(());
     }
 
@@ -252,7 +252,7 @@ pub async fn mark_removed(
         SET is_removed = true
         WHERE server_id = $1 AND name = $2",
         server_id,
-        &args.player
+        &player_name
     )
     .execute(db)
     .await?;
@@ -262,20 +262,20 @@ pub async fn mark_removed(
 
 pub async fn insert_player(
     db: &sqlx::Pool<sqlx::Postgres>,
+    server_id: i32,
+    player_name: String,
     player: RawOtherPlayer,
 ) -> Result<(), SFSError> {
-    log::info!("Player reported: {}@{}", player.name, player.server);
-    let server_id = get_server_id(db, player.server).await?;
     let data: Result<Vec<i64>, _> =
         player.info.trim().split('/').map(|a| a.parse()).collect();
     let Ok(data) = data else {
         return Err(SFSError::InvalidPlayer(
-            format!("Could not parse player {}", player.name).into(),
+            format!("Could not parse player {player_name}").into(),
         ));
     };
     let Ok(other) = OtherPlayer::parse(&data, ServerTime::default()) else {
         return Err(SFSError::InvalidPlayer(
-            format!("Could not parse player {}", player.name).into(),
+            format!("Could not parse player {player_name}").into(),
         ));
     };
     let Ok(mut fetch_time) = DateTime::parse_from_rfc3339(&player.fetch_date)
@@ -322,7 +322,7 @@ pub async fn insert_player(
          FROM player
          WHERE server_id = $1 AND name = $2",
         server_id,
-        player.name
+        player_name
     )
     .fetch_optional(&mut *tx)
     .await?;
@@ -362,7 +362,7 @@ pub async fn insert_player(
 
     let pid = if let Some(existing) = existing {
         if existing.last_reported.is_some_and(|a| a >= fetch_time) {
-            log::warn!("Discarded player update for {}", player.name);
+            log::warn!("Discarded player update for {player_name}");
             return Ok(());
         }
         let has_changed = existing.attributes.is_none_or(|a| a != attributes)
@@ -433,7 +433,7 @@ pub async fn insert_player(
             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
             RETURNING player_id",
             server_id,
-            player.name,
+            player_name,
             i32::from(other.level),
             attributes,
             next_attempt,
@@ -742,6 +742,33 @@ pub async fn get_hof_player(
             guild: player.guild_name,
         })
         .collect())
+}
+
+pub async fn handle_crawl_report(report: CrawlReport) -> Result<(), SFSError> {
+    let db = get_db().await?;
+    for (server, players) in report.0 {
+        let Ok(server_id) = get_server_id(&db, server.clone()).await else {
+            log::error!("Could not get server_id for '{server}'");
+            continue;
+        };
+        for (name, info) in players.0 {
+            if let Some(info) = info {
+                let res =
+                    insert_player(&db, server_id, name.clone(), info).await;
+                if let Err(e) = res {
+                    log::error!("Could not update {name}@{server}: {e}");
+                }
+            } else {
+                let res = mark_removed(&db, server_id, name.clone()).await;
+                if let Err(e) = res {
+                    log::error!(
+                        "Could not mark {name}@{server} as removed: {e}"
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 // WITH bad_guilds AS (

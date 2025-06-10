@@ -28,8 +28,6 @@ pub struct BugReportArgs {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct RawOtherPlayer {
-    pub name: String,
-    pub server: String,
     pub info: String,
     pub description: Option<String>,
     pub guild: Option<String>,
@@ -75,7 +73,10 @@ pub struct GetHofPlayersArgs {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct MarkMissingArgs {
-    pub server: String,
-    pub player: String,
-}
+/// Maps the player name to its crawled data. If the data is none, the
+/// player is no longer present on the server
+pub struct ServerPlayerReport(pub HashMap<String, Option<RawOtherPlayer>>);
+
+#[derive(Debug, Deserialize, Serialize)]
+/// Maps the server url to its crawled players
+pub struct CrawlReport(pub HashMap<String, ServerPlayerReport>);
