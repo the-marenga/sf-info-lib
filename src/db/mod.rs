@@ -372,7 +372,7 @@ pub async fn insert_player(
         guild_id = id;
     }
 
-    let pid = if let Some(existing) = existing {
+    let (pid, has_changed) = if let Some(existing) = existing {
         if existing.last_reported.is_some_and(|a| a >= fetch_time) {
             log::warn!("Discarded player update for {player_name}");
             return Ok(());
@@ -433,12 +433,12 @@ pub async fn insert_player(
         )
         .execute(&mut *tx)
         .await?;
-        existing.player_id
+        (existing.player_id, has_changed)
     } else {
         let next_attempt = fetch_time + days(1);
         // Insert a new player and so far unseen player. This is very unlikely
         // since players should be created after HoF search
-        sqlx::query_scalar!(
+        let pid = sqlx::query_scalar!(
             "INSERT INTO player
             (server_id, name, level, attributes, next_report_attempt, \
              last_reported, last_changed, equip_count, xp, honor, guild_id)
@@ -457,7 +457,8 @@ pub async fn insert_player(
             guild_id
         )
         .fetch_one(&mut *tx)
-        .await?
+        .await?;
+        (pid, true)
     };
 
     let description = player.description.unwrap_or_default();
@@ -521,22 +522,24 @@ pub async fn insert_player(
     .execute(&mut *tx)
     .await?;
 
-    sqlx::query!("DELETE FROM equipment WHERE player_id = $1", pid)
-        .execute(&mut *tx)
-        .await?;
+    if has_changed {
+        sqlx::query!("DELETE FROM equipment WHERE player_id = $1", pid)
+            .execute(&mut *tx)
+            .await?;
 
-    for ident in equip_idents {
-        sqlx::query!(
-            "INSERT INTO equipment (server_id, player_id, ident, attributes)
-            VAlUES ($1, $2, $3, $4)",
-            server_id,
-            pid,
-            ident,
-            // That should be fine
-            attributes as i32
-        )
-        .execute(&mut *tx)
-        .await?;
+        for ident in equip_idents {
+            sqlx::query!(
+                "INSERT INTO equipment (server_id, player_id, ident, attributes)
+                VAlUES ($1, $2, $3, $4)",
+                server_id,
+                pid,
+                ident,
+                // That should be fine
+                attributes as i32
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
     }
 
     return Ok(tx.commit().await?);
