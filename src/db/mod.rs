@@ -238,6 +238,28 @@ pub async fn get_scrapbook_advice(
     Err(SFSError::Internal("Did not fetch any scrapbook results"))
 }
 
+pub async fn mark_removed(
+    db: &sqlx::Pool<sqlx::Postgres>,
+    args: MarkMissingArgs,
+) -> Result<(), SFSError> {
+    let server_id = get_server_id(db, args.server).await?;
+    if args.player.is_empty() {
+        return Ok(());
+    }
+
+    sqlx::query!(
+        "UPDATE player
+        SET is_removed = true
+        WHERE server_id = $1 AND name = $2",
+        server_id,
+        &args.player
+    )
+    .execute(db)
+    .await?;
+
+    Ok(())
+}
+
 pub async fn insert_player(
     db: &sqlx::Pool<sqlx::Postgres>,
     player: RawOtherPlayer,

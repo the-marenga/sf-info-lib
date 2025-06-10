@@ -73,3 +73,9 @@ pub struct GetHofPlayersArgs {
     pub offset: u32,
     pub limit: u32,
 }
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct MarkMissingArgs {
+    pub server: String,
+    pub player: String,
+}
