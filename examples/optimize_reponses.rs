@@ -69,7 +69,9 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .await
             .unwrap();
 
-            let vec_u8: Vec<u8> = cast_vec(int_data);
+            let vec_u8: Vec<u8> =
+                int_data.into_iter().flat_map(|a| a.to_le_bytes()).collect();
+
             tokio::fs::write(format!("numbers/{}", data.hash), &encoded)
                 .await
                 .unwrap();
