@@ -272,6 +272,7 @@ pub async fn insert_player(
         .split('/')
         .map(|a| a.trim().parse())
         .collect();
+
     let data = match data {
         Ok(data) => data,
         Err(e) => {
@@ -418,7 +419,8 @@ pub async fn insert_player(
             "UPDATE player
             SET level = $1, attributes = $2, next_report_attempt = $3,
                 last_reported = $4, last_changed = $5, equip_count = $6, xp = \
-             $7, honor = $8, guild_id = $10
+             $7, honor = $8, guild_id = $10, class = $11, server_player_id = \
+             $12
             WHERE player_id = $9",
             i32::from(other.level),
             attributes,
@@ -429,7 +431,9 @@ pub async fn insert_player(
             experience,
             other.honor as i32,
             existing.player_id,
-            guild_id
+            guild_id,
+            other.class as i16,
+            other.player_id as i32
         )
         .execute(&mut *tx)
         .await?;
@@ -441,8 +445,9 @@ pub async fn insert_player(
         let pid = sqlx::query_scalar!(
             "INSERT INTO player
             (server_id, name, level, attributes, next_report_attempt, \
-             last_reported, last_changed, equip_count, xp, honor, guild_id)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+             last_reported, last_changed, equip_count, xp, honor, guild_id, \
+             class, server_player_id)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
             RETURNING player_id",
             server_id,
             player_name,
@@ -454,7 +459,9 @@ pub async fn insert_player(
             equip_count as i16,
             experience,
             other.honor as i32,
-            guild_id
+            guild_id,
+            other.class as i16,
+            other.player_id as i32
         )
         .fetch_one(&mut *tx)
         .await?;
@@ -507,8 +514,9 @@ pub async fn insert_player(
 
     sqlx::query_scalar!(
         "INSERT INTO player_info (player_id, fetch_time, xp, level, \
-         soldier_advice, description_id, guild_id, otherplayer_resp_id, honor)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+         soldier_advice, description_id, guild_id, otherplayer_resp_id, \
+         honor, rank)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, $10)",
         pid,
         fetch_time,
         experience,
@@ -518,6 +526,7 @@ pub async fn insert_player(
         guild_id,
         response_id,
         other.honor as i32,
+        other.rank as i32
     )
     .execute(&mut *tx)
     .await?;
