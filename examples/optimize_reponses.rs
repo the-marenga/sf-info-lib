@@ -1,6 +1,5 @@
 use std::{fmt::Write, io::Cursor};
 
-use bytemuck::cast_vec;
 use futures::StreamExt;
 use sf_info_lib::db::get_db;
 use zstd::{decode_all, encode_all};
