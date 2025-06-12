@@ -71,7 +71,7 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let vec_u8: Vec<u8> =
                 int_data.into_iter().flat_map(|a| a.to_le_bytes()).collect();
 
-            tokio::fs::write(format!("numbers/{}", data.hash), &encoded)
+            tokio::fs::write(format!("numbers/{}", data.hash), &vec_u8)
                 .await
                 .unwrap();
 
