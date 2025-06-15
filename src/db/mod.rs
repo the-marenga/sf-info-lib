@@ -190,7 +190,15 @@ pub async fn get_scrapbook_advice(
                 .is_some_and(|a| a.new_count.unwrap_or(0) >= good_amount)
         {
             if result.is_empty() {
-                log::warn!("No results for sb query {}", collected.len());
+                let now = Utc::now();
+                let mut k = RESULT_CACHE.write().await;
+                k.insert(
+                    args,
+                    CacheEntry {
+                        result: Arc::default(),
+                        insertion_time: now,
+                    },
+                );
                 return Ok(Arc::default());
             }
             let ids: Vec<_> = result.iter().map(|a| a.player_id).collect();
@@ -207,9 +215,10 @@ pub async fn get_scrapbook_advice(
             .collect();
 
             log::info!(
-                "Request for sb {} took {:?} and {attempt} attempts",
+                "Request for sb {} took {:?} and {attempt} attempts => {}",
                 collected.len(),
-                now.elapsed()
+                now.elapsed(),
+                result.first().and_then(|a| a.new_count).unwrap_or(-1)
             );
 
             let res: Arc<_> = result
