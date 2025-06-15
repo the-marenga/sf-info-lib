@@ -148,7 +148,12 @@ pub async fn get_scrapbook_advice(
     let good_amount = match collected.len() {
         ..200 => 9,
         200..500 => 8,
-        _ => 7,
+        500..1000 => 7,
+        1000..1400 => 6,
+        1400..1500 => 5,
+        1500..1600 => 4,
+        1600..1682 => 3,
+        _ => return Ok(Arc::default()),
     };
 
     let attempts = [10_000, 100_000, 1_000_000, 100_000_000];
