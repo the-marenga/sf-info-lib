@@ -11,16 +11,17 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ids = sqlx::query!(
         "SELECT otherplayer_resp_id, player_info_id, player_id
         FROM player_info
-        NATURAL JOIN otherplayer_resp
-        LIMIT 10000"
+        NATURAL JOIN otherplayer_resp"
     )
     .fetch_all(&db)
     .await?;
+    let bar = indicatif::ProgressBar::new(ids.len() as u64);
 
     let tasks = ids.into_iter().map(|id| {
         let db = db.clone();
-
+        let bar = bar.clone();
         async move {
+            bar.inc(1);
             let mut tx = db.begin().await.unwrap();
             let data = sqlx::query!(
                 "SELECT otherplayer_resp FROM otherplayer_resp WHERE \

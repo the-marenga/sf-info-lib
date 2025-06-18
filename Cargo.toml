@@ -24,6 +24,7 @@ zstd = { version = "0.13.3", optional = true }
 [dev-dependencies]
 tokio = { version = "1.45", features = ["full"] }
 futures = "*"
+indicatif = "0.17.11"
 
 [features]
 default = ["db"]
