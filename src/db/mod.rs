@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    fmt::Write,
     sync::{Arc, LazyLock},
     time::{Duration, Instant},
 };
@@ -508,7 +509,8 @@ pub async fn insert_player(
         }
     };
 
-    let resp = encode_all(player.info.as_bytes(), 3)
+    let new_raw_resp = reencode_response(&data)?;
+    let resp = encode_all(new_raw_resp.as_bytes(), 3)
         .map_err(|_| SFSError::Internal("Could not zstd compress response"))?;
 
     let digest = md5::compute(&resp);
@@ -567,6 +569,24 @@ pub async fn insert_player(
     });
     builder.build().execute(&mut *tx).await?;
     return Ok(tx.commit().await?);
+}
+
+fn reencode_response(data: &[i64]) -> Result<String, SFSError> {
+    let mut new_raw_resp = String::new();
+    for (pos, num) in data.iter().enumerate() {
+        if !new_raw_resp.is_empty() {
+            new_raw_resp.push('/');
+        }
+        if pos == 6 {
+            // Remove rank, since that changes for
+            new_raw_resp.push('0');
+        } else {
+            new_raw_resp
+                .write_fmt(format_args!("{num}"))
+                .map_err(|_| SFSError::Internal("Reencode"))?;
+        }
+    }
+    Ok(new_raw_resp)
 }
 
 pub async fn get_characters_to_crawl(
