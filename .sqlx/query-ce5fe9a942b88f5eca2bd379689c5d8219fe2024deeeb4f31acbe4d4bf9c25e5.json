@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT otherplayer_resp_id FROM otherplayer_resp WHERE otherplayer_resp = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "otherplayer_resp_id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bytea"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "ce5fe9a942b88f5eca2bd379689c5d8219fe2024deeeb4f31acbe4d4bf9c25e5"
+}

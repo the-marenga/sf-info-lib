@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO otherplayer_resp (otherplayer_resp)\n                VALUES ($1)\n                RETURNING otherplayer_resp_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "otherplayer_resp_id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bytea"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "7c5a9432bb68f8f3c5813a3552ae682e8f934f7002e0993a6d8d807ab5d3e832"
+}

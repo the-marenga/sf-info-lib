@@ -578,7 +578,7 @@ pub async fn insert_player(
     return Ok(tx.commit().await?);
 }
 
-fn reencode_response(data: &[i64]) -> Result<String, SFSError> {
+pub fn reencode_response(data: &[i64]) -> Result<String, SFSError> {
     let mut new_raw_resp = String::new();
     for (pos, num) in data.iter().enumerate() {
         if !new_raw_resp.is_empty() {
