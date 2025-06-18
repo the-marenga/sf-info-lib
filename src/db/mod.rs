@@ -513,12 +513,10 @@ pub async fn insert_player(
     let resp = encode_all(new_raw_resp.as_bytes(), 3)
         .map_err(|_| SFSError::Internal("Could not zstd compress response"))?;
 
-    let digest = md5::compute(&resp);
-    let hash = format!("{digest:x}");
-
     let response_id = sqlx::query_scalar!(
-        "SELECT otherplayer_resp_id FROM otherplayer_resp WHERE hash = $1",
-        hash
+        "SELECT otherplayer_resp_id FROM otherplayer_resp WHERE \
+         otherplayer_resp = $1",
+        &resp
     )
     .fetch_optional(&mut *tx)
     .await?;
@@ -527,11 +525,10 @@ pub async fn insert_player(
         Some(id) => id,
         None => {
             sqlx::query_scalar!(
-                "INSERT INTO otherplayer_resp (otherplayer_resp, hash)
-                VALUES ($1, $2)
+                "INSERT INTO otherplayer_resp (otherplayer_resp)
+                VALUES ($1)
                 RETURNING otherplayer_resp_id",
-                resp,
-                hash
+                &resp,
             )
             .fetch_one(&mut *tx)
             .await?
