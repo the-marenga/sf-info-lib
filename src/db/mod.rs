@@ -517,16 +517,26 @@ pub async fn insert_player(
     let hash = format!("{digest:x}");
 
     let response_id = sqlx::query_scalar!(
-        "INSERT INTO otherplayer_resp (otherplayer_resp, hash) VALUES ($1, $2)
-        ON CONFLICT(hash)
-        DO UPDATE SET otherplayer_resp_id = \
-         otherplayer_resp.otherplayer_resp_id
-        RETURNING otherplayer_resp_id",
-        resp,
+        "SELECT otherplayer_resp_id FROM otherplayer_resp WHERE hash = $1",
         hash
     )
-    .fetch_one(&mut *tx)
+    .fetch_optional(&mut *tx)
     .await?;
+
+    let response_id = match response_id {
+        Some(id) => id,
+        None => {
+            sqlx::query_scalar!(
+                "INSERT INTO otherplayer_resp (otherplayer_resp, hash)
+                VALUES ($1, $2)
+                RETURNING otherplayer_resp_id",
+                resp,
+                hash
+            )
+            .fetch_one(&mut *tx)
+            .await?
+        }
+    };
 
     sqlx::query_scalar!(
         "INSERT INTO player_info (player_id, fetch_time, xp, level, \
