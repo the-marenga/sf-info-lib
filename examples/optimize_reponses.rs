@@ -43,7 +43,7 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // are identical is basically zero
             let pid = int_data[0];
             let rank = int_data[6];
-            let class = int_data[20];
+            let class = int_data[20] - 1;
 
             if rank == 0 {
                 return;
