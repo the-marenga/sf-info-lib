@@ -12,10 +12,12 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .fetch_all(&db)
     .await?;
-
+    let bar = indicatif::ProgressBar::new(ids.len() as u64);
     let tasks = ids.into_iter().map(|id| {
         let db = db.clone();
+        let bar = bar.clone();
         async move {
+            bar.inc(1);
             sqlx::query_scalar!(
                 "DELETE FROM otherplayer_resp
                 WHERE otherplayer_resp_id = $1",
