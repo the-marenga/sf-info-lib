@@ -32,7 +32,13 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .fetch_all(&db)
         .await?;
-        let bar = indicatif::ProgressBar::new(players.len() as u64);
+        let bar = indicatif::ProgressBar::new(
+            players
+                .iter()
+                .filter_map(|a| a.player_ids.as_deref())
+                .map(|a| a.len() as u64)
+                .sum::<u64>(),
+        );
 
         for rec in players {
             let Some(level) = rec.level else {
@@ -41,11 +47,11 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let Some(ids) = rec.player_ids else {
                 continue;
             };
-            bar.inc(1);
             data.write_all((-1i8).to_le_bytes().as_ref())?;
             data.write_all((level as u16).to_le_bytes().as_ref())?;
 
             for pid in ids {
+                bar.inc(1);
                 serialize_player(pid, &mut data, &db).await?;
             }
         }
