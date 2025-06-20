@@ -11,7 +11,8 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ids = sqlx::query!(
         "SELECT otherplayer_resp_id, player_info_id, player_id
         FROM player_info
-        NATURAL JOIN otherplayer_resp"
+        NATURAL JOIN otherplayer_resp
+        WHERE rank is null"
     )
     .fetch_all(&db)
     .await?;
