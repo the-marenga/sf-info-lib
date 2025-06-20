@@ -13,9 +13,11 @@ use sqlx::{Pool, Postgres};
 #[tokio::main]
 pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db = get_db().await?;
-    let server_ids = sqlx::query_scalar!("SELECT server_id FROM server")
-        .fetch_all(&db)
-        .await?;
+    let server_ids = sqlx::query_scalar!(
+        "SELECT server_id FROM server ORDER BY server_id ASC"
+    )
+    .fetch_all(&db)
+    .await?;
 
     for server_id in server_ids.into_iter().take(1) {
         let mut data: Vec<u8> = b"ZHOF3_01".into();
@@ -30,6 +32,7 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .fetch_all(&db)
         .await?;
+        let bar = indicatif::ProgressBar::new(players.len() as u64);
 
         for rec in players {
             let Some(level) = rec.level else {
@@ -38,6 +41,7 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let Some(ids) = rec.player_ids else {
                 continue;
             };
+            bar.inc(1);
             data.write_all((-1i8).to_le_bytes().as_ref())?;
             data.write_all((level as u16).to_le_bytes().as_ref())?;
 
