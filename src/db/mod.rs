@@ -617,7 +617,8 @@ pub async fn get_characters_to_crawl(
           -- This forced an index to be used in my testing. Could also make
           -- things worse, will have to test
           ORDER BY next_report_attempt
-          LIMIT $3 )
+          LIMIT $3
+          FOR NO KEY UPDATE)
         UPDATE player
         SET next_report_attempt = $4
         WHERE player_id IN (SELECT player_id FROM cte)
