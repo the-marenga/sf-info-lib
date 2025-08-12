@@ -17,14 +17,14 @@ thiserror = "2.0"
 sf-api = { git = "https://github.com/the-marenga/sf-api.git", branch = "other-player-pub", default-features = false, optional = true }
 log = { version = "0.4", optional = true }
 url = { version = "2.5", optional = true }
-tokio = { version = "1.45", optional = true }
+tokio = { version = "1.47", optional = true }
 fastrand = { version = "2.3", optional = true }
 zstd = { version = "0.13.3", optional = true }
 
 [dev-dependencies]
-tokio = { version = "1.45", features = ["full"] }
+tokio = { version = "1.47", features = ["full"] }
 futures = "*"
-indicatif = "0.17.11"
+indicatif = "0.18.0"
 
 [features]
 default = ["db"]
