@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+use crate::types::ServerCategory;
+
 pub const fn minutes(minutes: u64) -> Duration {
     Duration::from_secs(60 * minutes)
 }
@@ -22,4 +24,24 @@ pub fn compress_ident(
     // We never use more than 32 bits, so this is fine. Could probably have
     // used i32 everywhere, but I was unsure about signed bit causing issues
     res as i32
+}
+
+pub fn ident_to_info(ident: &str) -> (String, ServerCategory) {
+    if let Some((_, num)) = ident.split_once("eu") {
+        (format!("https://s{num}.sfgame.eu/"), ServerCategory::Europe)
+    } else if let Some((_, num)) = ident.split_once("f") {
+        (format!("https://f{num}.sfgame.net/"), ServerCategory::Fused)
+    } else if let Some((_, num)) = ident.split_once("am") {
+        (
+            format!("https://am{num}.sfgame.net/"),
+            ServerCategory::America,
+        )
+    } else if let Some((_, num)) = ident.split_once("w") {
+        (
+            format!("https://w{num}.sfgame.net/"),
+            ServerCategory::International,
+        )
+    } else {
+        (String::new(), ServerCategory::Fused)
+    }
 }

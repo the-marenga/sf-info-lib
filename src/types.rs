@@ -67,9 +67,30 @@ pub struct HofPlayerInfo {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct GetHofPlayersArgs {
-    pub server: String,
+    pub server_id: i32,
     pub offset: u32,
     pub limit: u32,
+}
+
+
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Clone, Copy)]
+pub enum ServerCategory {
+    International,
+    Fused,
+    Europe,
+    America,
+}
+
+#[derive(Debug, Deserialize, Serialize, PartialEq, Clone)]
+pub struct ServerInfo {
+    pub server_id: i32,
+    pub url: String,
+    pub shorthand: String,
+    pub category: ServerCategory,
+    pub player_count: i64,
+    pub active_players: i64,
+    pub classes: HashMap<String, i64>,
+    pub lvl_avg: i32,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -80,3 +101,8 @@ pub struct ServerPlayerReport(pub HashMap<String, Option<RawOtherPlayer>>);
 #[derive(Debug, Deserialize, Serialize)]
 /// Maps the server url to its crawled players
 pub struct CrawlReport(pub HashMap<String, ServerPlayerReport>);
+
+#[derive(Debug, Deserialize, Serialize, PartialEq, Clone)]
+pub struct DetailedServerInfo {
+
+}

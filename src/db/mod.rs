@@ -16,7 +16,7 @@ use tokio::sync::RwLock;
 use zstd::stream::encode_all;
 
 use crate::{
-    common::{compress_ident, days, hours, minutes},
+    common::{compress_ident, days, hours, ident_to_info, minutes},
     error::SFSError,
     types::*,
 };
@@ -779,7 +779,6 @@ pub async fn get_hof_player(
     args: GetHofPlayersArgs,
 ) -> Result<Vec<HofPlayerInfo>, SFSError> {
     let db = get_db().await?;
-    let server_id = get_server_id(&db, args.server).await?;
 
     let players = sqlx::query!(
         "WITH paginated_players AS (
@@ -795,8 +794,9 @@ pub async fn get_hof_player(
         SELECT p.name as player_name, g.name as guild_name, p.honor, p.level
         FROM paginated_players p
         LEFT JOIN guild g ON g.guild_id = p.guild_id
+        ORDER BY honor DESC
     ",
-        server_id,
+        args.server_id,
         args.offset as i32,
         args.limit.clamp(1, 100) as i32
     )
@@ -843,6 +843,129 @@ pub async fn handle_crawl_report(report: CrawlReport) -> Result<(), SFSError> {
     Ok(())
 }
 
+pub async fn get_servers() -> Result<Arc<[ServerInfo]>, SFSError> {
+    static RESULT_CACHE: LazyLock<
+        tokio::sync::Mutex<Option<(Arc<[ServerInfo]>, Instant)>>,
+    > = LazyLock::new(Default::default);
+
+    let mut cache_res = RESULT_CACHE.lock().await;
+
+    if let Some(res) = &*cache_res
+        && res.1.elapsed() < hours(6)
+    {
+        return Ok(res.0.clone());
+    }
+
+    let db = get_db().await?;
+
+    let server_ids = sqlx::query!("SELECT url, server_id FROM server")
+        .fetch_all(&db)
+        .await?;
+
+    let mut server_ids: HashMap<_, _> = server_ids
+        .into_iter()
+        .map(|a| (a.server_id, a.url))
+        .collect();
+
+    let info = sqlx::query!(
+        "
+        SELECT
+            server_id,
+            count(*) AS total,
+            count(*) FILTER (WHERE last_changed + interval '3 days' > now() AT \
+         TIME ZONE 'UTC' ) AS active,
+         count(*) FILTER (WHERE class = 0) AS warriors,
+         count(*) FILTER (WHERE class = 1) AS mages,
+         count(*) FILTER (WHERE class = 2) AS scouts,
+         count(*) FILTER (WHERE class = 3) AS assassins,
+         count(*) FILTER (WHERE class = 4) AS battle_mages,
+         count(*) FILTER (WHERE class = 5) AS berserkers,
+         count(*) FILTER (WHERE class = 6) AS demon_hunters,
+         count(*) FILTER (WHERE class = 7) AS druids,
+         count(*) FILTER (WHERE class = 8) AS bards,
+         count(*) FILTER (WHERE class = 9) AS necromancer,
+         count(*) FILTER (WHERE class = 10) AS paladins,
+         avg(level)::int as avg_level
+        FROM
+       	player
+            GROUP BY
+           	server_id
+            ORDER BY
+    	count(*) DESC;
+	"
+    )
+    .fetch_all(&db)
+    .await?;
+
+    let mut res: Vec<ServerInfo> = Default::default();
+
+    for server_info in info {
+        let Some(url) = server_ids.remove(&server_info.server_id) else {
+            continue;
+        };
+
+        let Some((id, tld)) = url
+            .trim_start_matches("https://")
+            .trim_end_matches('/')
+            .split_once(".sfgame.")
+        else {
+            continue;
+        };
+
+        let shorthand = match tld {
+            "eu" => format!("eu{}", id.trim_start_matches('s')),
+            _ => id.to_string(),
+        };
+
+        let category = match tld {
+            "eu" => ServerCategory::Europe,
+            "net" if id.starts_with("am") => ServerCategory::America,
+            "net" if id.starts_with('w') => ServerCategory::International,
+            _ => ServerCategory::Fused,
+        };
+
+        let info = ServerInfo {
+            url,
+            shorthand,
+            category,
+            player_count: server_info.total.unwrap_or(0),
+            active_players: server_info.active.unwrap_or(0),
+            classes: [
+                ("Warrior".to_string(), server_info.warriors.unwrap_or(0)),
+                ("Mage".to_string(), server_info.mages.unwrap_or(0)),
+                ("Scout".to_string(), server_info.scouts.unwrap_or(0)),
+                ("Assassin".to_string(), server_info.assassins.unwrap_or(0)),
+                (
+                    "BattleMage".to_string(),
+                    server_info.battle_mages.unwrap_or(0),
+                ),
+                ("Berserker".to_string(), server_info.berserkers.unwrap_or(0)),
+                (
+                    "DemonHunter".to_string(),
+                    server_info.demon_hunters.unwrap_or(0),
+                ),
+                ("Druid".to_string(), server_info.druids.unwrap_or(0)),
+                ("Bard".to_string(), server_info.bards.unwrap_or(0)),
+                (
+                    "Necromancer".to_string(),
+                    server_info.necromancer.unwrap_or(0),
+                ),
+                ("Paladin".to_string(), server_info.paladins.unwrap_or(0)),
+            ]
+            .into_iter()
+            .collect(),
+            lvl_avg: server_info.avg_level.unwrap_or(0),
+            server_id: server_info.server_id,
+        };
+        res.push(info);
+    }
+
+    let c: Arc<[_]> = res.into();
+    *cache_res = Some((c.clone(), Instant::now()));
+    drop(cache_res);
+    Ok(c)
+}
+
 // WITH bad_guilds AS (
 //     SELECT guild_id FROM guild where name = ''
 // )
@@ -857,3 +980,56 @@ pub async fn handle_crawl_report(report: CrawlReport) -> Result<(), SFSError> {
 //     ORDER BY pi.fetch_time DESC
 //     LIMIT 1
 // );
+
+pub async fn get_server_info(
+    ident: String,
+) -> Result<Arc<DetailedServerInfo>, SFSError> {
+    let (url, cat) = ident_to_info(&ident);
+
+    static RESULT_CACHE: LazyLock<
+        tokio::sync::Mutex<Option<(Arc<DetailedServerInfo>, Instant)>>,
+    > = LazyLock::new(Default::default);
+
+    let mut cache_res = RESULT_CACHE.lock().await;
+
+    if let Some(res) = &*cache_res
+        && res.1.elapsed() < hours(6)
+    {
+        return Ok(res.0.clone());
+    }
+
+    let db = get_db().await?;
+
+
+    let info = sqlx::query!(
+        "
+        SELECT
+            server_id,
+            count(*) AS total,
+            count(*) FILTER (WHERE last_changed + interval '3 days' > now() AT \
+         TIME ZONE 'UTC' ) AS active,
+         count(*) FILTER (WHERE class = 0) AS warriors,
+         count(*) FILTER (WHERE class = 1) AS mages,
+         count(*) FILTER (WHERE class = 2) AS scouts,
+         count(*) FILTER (WHERE class = 3) AS assassins,
+         count(*) FILTER (WHERE class = 4) AS battle_mages,
+         count(*) FILTER (WHERE class = 5) AS berserkers,
+         count(*) FILTER (WHERE class = 6) AS demon_hunters,
+         count(*) FILTER (WHERE class = 7) AS druids,
+         count(*) FILTER (WHERE class = 8) AS bards,
+         count(*) FILTER (WHERE class = 9) AS necromancer,
+         count(*) FILTER (WHERE class = 10) AS paladins,
+         avg(level)::int as avg_level
+        FROM
+       	player
+            GROUP BY
+           	server_id
+            ORDER BY
+    	count(*) DESC;
+	"
+    )
+    .fetch_all(&db)
+    .await?;
+
+    todo!()
+}
