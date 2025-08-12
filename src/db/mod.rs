@@ -308,7 +308,7 @@ pub async fn insert_player(
         }
     };
     let equip_data: Result<Vec<i64>, _> = player
-        .info
+        .raw_equipment
         .trim()
         .split('/')
         .map(|a| a.trim().parse())
