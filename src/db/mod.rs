@@ -8,6 +8,7 @@ use std::{
 use chrono::{DateTime, Utc};
 use sf_api::gamestate::{
     ServerTime,
+    items::Equipment,
     social::{HallOfFamePlayer, OtherPlayer},
     unlockables::ScrapBook,
 };
@@ -297,7 +298,7 @@ pub async fn insert_player(
             ));
         }
     };
-    let other = match OtherPlayer::parse(&data, ServerTime::default()) {
+    let mut other = match OtherPlayer::parse(&data, ServerTime::default()) {
         Ok(other) => other,
         Err(e) => {
             return Err(SFSError::InvalidPlayer(
@@ -306,6 +307,34 @@ pub async fn insert_player(
             ));
         }
     };
+    let equip_data: Result<Vec<i64>, _> = player
+        .info
+        .trim()
+        .split('/')
+        .map(|a| a.trim().parse())
+        .collect();
+
+    let equip_data = match equip_data {
+        Ok(data) => data,
+        Err(e) => {
+            return Err(SFSError::InvalidPlayer(
+                format!("Could not parse player data for {player_name}: {e}")
+                    .into(),
+            ));
+        }
+    };
+    let other_equipment =
+        match Equipment::parse(&equip_data, ServerTime::default()) {
+            Ok(other) => other,
+            Err(e) => {
+                return Err(SFSError::InvalidPlayer(
+                    format!("Could not parse other player {player_name}: {e}")
+                        .into(),
+                ));
+            }
+        };
+    other.equipment = other_equipment;
+
     let Ok(mut fetch_time) = DateTime::parse_from_rfc3339(&player.fetch_date)
         .map(|a| a.to_utc().naive_utc())
     else {
@@ -509,7 +538,7 @@ pub async fn insert_player(
         }
     };
 
-    let new_raw_resp = reencode_response(&data)?;
+    let new_raw_resp = reencode_response(&data, &player.raw_equipment)?;
     let resp = encode_all(new_raw_resp.as_bytes(), 3)
         .map_err(|_| SFSError::Internal("Could not zstd compress response"))?;
 
@@ -525,8 +554,8 @@ pub async fn insert_player(
         Some(id) => id,
         None => {
             sqlx::query_scalar!(
-                "INSERT INTO otherplayer_resp (otherplayer_resp)
-                VALUES ($1)
+                "INSERT INTO otherplayer_resp (otherplayer_resp, version)
+                VALUES ($1, 2)
                 RETURNING otherplayer_resp_id",
                 &resp,
             )
@@ -578,7 +607,12 @@ pub async fn insert_player(
     return Ok(tx.commit().await?);
 }
 
-pub fn reencode_response(data: &[i64]) -> Result<String, SFSError> {
+static STORED_SPLIT_CHAR: char = '🎆';
+
+pub fn reencode_response(
+    data: &[i64],
+    equip_data: &str,
+) -> Result<String, SFSError> {
     let mut new_raw_resp = String::new();
     for (pos, num) in data.iter().enumerate() {
         if !new_raw_resp.is_empty() {
@@ -593,6 +627,8 @@ pub fn reencode_response(data: &[i64]) -> Result<String, SFSError> {
                 .map_err(|_| SFSError::Internal("Reencode"))?;
         }
     }
+    new_raw_resp.push(STORED_SPLIT_CHAR);
+    new_raw_resp.push_str(equip_data);
     Ok(new_raw_resp)
 }
 
@@ -999,7 +1035,6 @@ pub async fn get_server_info(
     }
 
     let db = get_db().await?;
-
 
     let info = sqlx::query!(
         "

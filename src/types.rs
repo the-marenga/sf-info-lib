@@ -33,6 +33,7 @@ pub struct RawOtherPlayer {
     pub guild: Option<String>,
     pub soldier_advice: Option<i64>,
     pub fetch_date: String,
+    pub raw_equipment: String,
 }
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
