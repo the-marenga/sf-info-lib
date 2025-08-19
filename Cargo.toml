@@ -25,6 +25,11 @@ zstd = { version = "0.13.3", optional = true }
 tokio = { version = "1.47", features = ["full"] }
 futures = "*"
 indicatif = "0.18.0"
+sf-api = { git = "https://github.com/the-marenga/sf-api.git", branch = "other-player-pub" }
+serde_json = "*"
+zune-inflate = { version = "0.2.54", default-features = false, features = [
+    "zlib",
+] }
 
 [features]
 default = ["db"]
