@@ -1,7 +1,11 @@
-use std::{collections::BTreeMap, io::{Read, Write}, time::Duration};
+use std::{
+    collections::BTreeMap,
+    io::{Read, Write},
+    time::Duration,
+};
 
 use chrono::{DateTime, NaiveDate, Utc};
-use flate2::{bufread::ZlibEncoder, Compression};
+use flate2::{Compression, bufread::ZlibEncoder};
 use indicatif::ProgressStyle;
 use serde::{Deserialize, Serialize};
 use sf_api::gamestate::{character::Class, unlockables::EquipmentIdent};
@@ -102,7 +106,6 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .fetch_all(&db)
         .await?;
 
-
         bar.set_length(players.len() as u64);
         bar.set_message("Processing players...");
 
@@ -141,16 +144,16 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut res = Vec::new();
         encoder.read_to_end(&mut res).unwrap();
 
-        let path = format!(
-            "{}.zhof",
-            server
-                .url
-                .trim_start_matches("https:")
-                .replace("/", "")
-                .replace(".", "")
-        );
+        let server_ident = server
+            .url
+            .trim_start_matches("https:")
+            .replace("/", "")
+            .replace(".", "");
+        let path = format!("{}.zhof", server_ident);
 
         std::fs::write(&path, &res).unwrap();
+
+        std::fs::write(format!("{server_ident}.version"), Utc::now().to_rfc2822()).unwrap();
         bar.finish_and_clear();
     }
 
