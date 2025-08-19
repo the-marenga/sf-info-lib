@@ -1,0 +1,139 @@
+use std::{collections::BTreeMap, io::Write};
+
+use chrono::{DateTime, NaiveDate, Utc};
+use serde::{Deserialize, Serialize};
+use sf_api::gamestate::{character::Class, unlockables::EquipmentIdent};
+use sf_info_lib::{
+    common::{compress_ident, decompress_ident},
+    db::get_db,
+};
+use sqlx::{Pool, Postgres};
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ZHofBackup {
+    #[serde(default)]
+    pub todo_pages: Vec<usize>,
+    #[serde(default)]
+    pub invalid_pages: Vec<usize>,
+    #[serde(default)]
+    pub todo_accounts: Vec<String>,
+    #[serde(default)]
+    pub invalid_accounts: Vec<String>,
+    #[serde(default)]
+    pub order: CrawlingOrder,
+    pub export_time: Option<DateTime<Utc>>,
+    pub characters: Vec<CharacterInfo>,
+    #[serde(default)]
+    pub lvl_skipped_accounts: BTreeMap<u32, Vec<String>>,
+    #[serde(default)]
+    pub min_level: u32,
+    #[serde(default = "default_max_lvl")]
+    pub max_level: u32,
+}
+
+fn default_max_lvl() -> u32 {
+    9999
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+pub struct CharacterInfo {
+    equipment: Vec<EquipmentIdent>,
+    name: String,
+    uid: u32,
+    level: u16,
+    #[serde(skip)]
+    stats: Option<u32>,
+    #[serde(skip)]
+    fetch_date: Option<NaiveDate>,
+    #[serde(skip)]
+    class: Option<Class>,
+}
+
+#[derive(
+    Debug, Serialize, Deserialize, Default, Clone, Copy, PartialEq, Eq,
+)]
+pub enum CrawlingOrder {
+    #[default]
+    Random,
+    TopDown,
+    BottomUp,
+}
+
+#[tokio::main]
+pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let db = get_db().await?;
+    let server_ids = sqlx::query!(
+        "SELECT server_id, url FROM server ORDER BY server_id ASC"
+    )
+    .fetch_all(&db)
+    .await?;
+
+    for server in server_ids.into_iter() {
+        let mut zhof = ZHofBackup {
+            export_time: Some(Utc::now()),
+            ..Default::default()
+        };
+        let players = sqlx::query!(
+            "SELECT
+                name, level, server_player_id, array_agg(ident) as idents
+            FROM player
+            JOIN equipment on equipment.player_id = player.player_id
+            WHERE player.server_id = $1 AND is_removed = FALSE AND level is \
+             not null
+            GROUP BY name, level, server_player_id
+            ",
+            server.server_id
+        )
+        .fetch_all(&db)
+        .await?;
+
+        let bar = indicatif::ProgressBar::new(players.len() as u64);
+
+        for rec in players {
+            let Some(level) = rec.level else {
+                continue;
+            };
+            // let Some(uid) = rec.server_player_id else {
+            //     continue;
+            // };
+            let uid = rec.server_player_id.unwrap_or_default();
+
+            let equipment: Vec<_> = rec
+                .idents
+                .unwrap_or_default()
+                .into_iter()
+                .map(decompress_ident)
+                .collect();
+
+            let info = CharacterInfo {
+                equipment,
+                name: rec.name,
+                uid: uid as u32,
+                level: level as u16,
+                stats: None,
+                fetch_date: None,
+                class: None,
+            };
+            zhof.characters.push(info);
+            bar.inc(1);
+        }
+
+        let serialized = serde_json::to_string(&zhof).unwrap();
+        let mut encoder =
+            zune_inflate::DeflateEncoder::new(serialized.as_bytes());
+        let res = encoder.encode_zlib();
+        let path = format!(
+            "{}.zhof",
+            server
+                .url
+                .trim_start_matches("https:")
+                .replace("/", "")
+                .replace(".", "")
+        );
+
+        std::fs::write(&path, &res).unwrap();
+        bar.finish_and_clear();
+    }
+
+    Ok(())
+}

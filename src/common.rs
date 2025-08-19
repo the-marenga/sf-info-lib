@@ -1,5 +1,8 @@
 use std::time::Duration;
 
+#[cfg(feature = "db")]
+use sf_api::gamestate::unlockables::EquipmentIdent;
+
 use crate::types::ServerCategory;
 
 pub const fn minutes(minutes: u64) -> Duration {
@@ -24,6 +27,43 @@ pub fn compress_ident(
     // We never use more than 32 bits, so this is fine. Could probably have
     // used i32 everywhere, but I was unsure about signed bit causing issues
     res as i32
+}
+
+#[cfg(feature = "db")]
+#[allow(clippy::missing_panics_doc)]
+pub fn decompress_ident(ident: i32) -> EquipmentIdent {
+    use sf_api::gamestate::{character::Class, items::EquipmentSlot};
+    let model_id = ident & 0xFF;
+    let color = (ident >> 16) & 0xF;
+    let typ = (ident >> 24) & 0xF;
+    let typ = match typ {
+        1 => EquipmentSlot::Hat,
+        2 => EquipmentSlot::BreastPlate,
+        3 => EquipmentSlot::Gloves,
+        4 => EquipmentSlot::FootWear,
+        5 => EquipmentSlot::Amulet,
+        6 => EquipmentSlot::Belt,
+        7 => EquipmentSlot::Ring,
+        8 => EquipmentSlot::Talisman,
+        9 => EquipmentSlot::Weapon,
+        10 => EquipmentSlot::Shield,
+        _ => panic!(),
+    };
+    let class = (ident >> 28) & 0xF;
+    let class = match class {
+        0 => None,
+        1 => Some(Class::Warrior),
+        2 => Some(Class::Mage),
+        3 => Some(Class::Scout),
+        _ => panic!(),
+    };
+
+    EquipmentIdent {
+        class,
+        typ,
+        model_id: model_id as u16,
+        color: color as u8,
+    }
 }
 
 pub fn ident_to_info(ident: &str) -> (String, ServerCategory) {
