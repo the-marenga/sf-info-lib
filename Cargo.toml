@@ -27,9 +27,7 @@ futures = "*"
 indicatif = "0.18.0"
 sf-api = { git = "https://github.com/the-marenga/sf-api.git", branch = "other-player-pub" }
 serde_json = "*"
-zune-inflate = { version = "0.2.54", default-features = false, features = [
-    "zlib",
-] }
+flate2 = { version = "1.1.2", default-features = false, features = ["zlib"] }
 
 [features]
 default = ["db"]

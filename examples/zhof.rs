@@ -1,6 +1,7 @@
-use std::{collections::BTreeMap, io::Write};
+use std::{collections::BTreeMap, io::{Read, Write}, time::Duration};
 
 use chrono::{DateTime, NaiveDate, Utc};
+use flate2::{bufread::ZlibEncoder, Compression};
 use serde::{Deserialize, Serialize};
 use sf_api::gamestate::{character::Class, unlockables::EquipmentIdent};
 use sf_info_lib::{
@@ -87,16 +88,17 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .fetch_all(&db)
         .await?;
 
-        let bar = indicatif::ProgressBar::new(players.len() as u64);
+        let bar = indicatif::ProgressBar::new_spinner();
+        bar.enable_steady_tick(Duration::from_millis(100));
+        bar.set_length(players.len() as u64);
 
         for rec in players {
             let Some(level) = rec.level else {
                 continue;
             };
-            // let Some(uid) = rec.server_player_id else {
-            //     continue;
-            // };
-            let uid = rec.server_player_id.unwrap_or_default();
+            let Some(uid) = rec.server_player_id else {
+                continue;
+            };
 
             let equipment: Vec<_> = rec
                 .idents
@@ -118,10 +120,13 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
             bar.inc(1);
         }
 
+        // TODO: Do this without keeping it all in memory
         let serialized = serde_json::to_string(&zhof).unwrap();
         let mut encoder =
-            zune_inflate::DeflateEncoder::new(serialized.as_bytes());
-        let res = encoder.encode_zlib();
+            ZlibEncoder::new(serialized.as_bytes(), Compression::best());
+        let mut res = Vec::new();
+        encoder.read_to_end(&mut res).unwrap();
+
         let path = format!(
             "{}.zhof",
             server
