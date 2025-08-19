@@ -2,6 +2,7 @@ use std::{collections::BTreeMap, io::{Read, Write}, time::Duration};
 
 use chrono::{DateTime, NaiveDate, Utc};
 use flate2::{bufread::ZlibEncoder, Compression};
+use indicatif::ProgressStyle;
 use serde::{Deserialize, Serialize};
 use sf_api::gamestate::{character::Class, unlockables::EquipmentIdent};
 use sf_info_lib::{
@@ -74,6 +75,19 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
             export_time: Some(Utc::now()),
             ..Default::default()
         };
+
+        let bar = indicatif::ProgressBar::new_spinner();
+        let style = ProgressStyle::default_spinner()
+            .template(
+                "{spinner} {prefix:10.red} - {msg:.blue} {human_pos:3} \
+                 [{elapsed_precise}]",
+            )
+            .unwrap_or_else(|_| ProgressStyle::default_spinner());
+        bar.set_style(style);
+        bar.enable_steady_tick(Duration::from_millis(100));
+        bar.set_prefix(server.url.clone());
+        bar.set_message("Loading player data");
+
         let players = sqlx::query!(
             "SELECT
                 name, level, server_player_id, array_agg(ident) as idents
@@ -88,9 +102,9 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .fetch_all(&db)
         .await?;
 
-        let bar = indicatif::ProgressBar::new_spinner();
-        bar.enable_steady_tick(Duration::from_millis(100));
+
         bar.set_length(players.len() as u64);
+        bar.set_message("Processing players...");
 
         for rec in players {
             let Some(level) = rec.level else {
