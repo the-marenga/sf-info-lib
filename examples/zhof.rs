@@ -79,8 +79,8 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let bar = indicatif::ProgressBar::new_spinner();
         let style = ProgressStyle::default_spinner()
             .template(
-                "{spinner} {prefix:10.red} - {msg:.blue} {human_pos:3} \
-                 [{elapsed_precise}]",
+                "{spinner} {prefix:17.red} - {msg:25.blue} {wide_bar:.green} \
+                 [{elapsed_precise}/{duration_precise}] [{pos:6}/{len:6}]",
             )
             .unwrap_or_else(|_| ProgressStyle::default_spinner());
         bar.set_style(style);
