@@ -1,19 +1,12 @@
-use std::{
-    collections::BTreeMap,
-    io::{Read, Write},
-    time::Duration,
-};
+use std::{collections::BTreeMap, io::Read, time::Duration};
 
 use chrono::{DateTime, NaiveDate, Utc};
+use clap::Parser;
 use flate2::{Compression, bufread::ZlibEncoder};
 use indicatif::ProgressStyle;
 use serde::{Deserialize, Serialize};
 use sf_api::gamestate::{character::Class, unlockables::EquipmentIdent};
-use sf_info_lib::{
-    common::{compress_ident, decompress_ident},
-    db::get_db,
-};
-use sqlx::{Pool, Postgres};
+use sf_info_lib::{common::decompress_ident, db::get_db};
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct ZHofBackup {
@@ -65,8 +58,17 @@ pub enum CrawlingOrder {
     BottomUp,
 }
 
+#[derive(Debug, clap::Parser)]
+pub struct Args {
+    /// Only fetch this url
+    #[clap(short, long)]
+    pub url: Option<String>,
+}
+
 #[tokio::main]
 pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args = Args::parse();
+
     let db = get_db().await?;
     let server_ids = sqlx::query!(
         "SELECT server_id, url FROM server ORDER BY server_id ASC"
@@ -74,7 +76,10 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .fetch_all(&db)
     .await?;
 
-    for server in server_ids.into_iter() {
+    for server in server_ids
+        .into_iter()
+        .filter(|a| args.url.as_ref().is_none_or(|b| a.url.contains(b)))
+    {
         let mut zhof = ZHofBackup {
             export_time: Some(Utc::now()),
             ..Default::default()
@@ -153,7 +158,11 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         std::fs::write(&path, &res).unwrap();
 
-        std::fs::write(format!("{server_ident}.version"), Utc::now().to_rfc2822()).unwrap();
+        std::fs::write(
+            format!("{server_ident}.version"),
+            Utc::now().to_rfc2822(),
+        )
+        .unwrap();
         bar.finish_and_clear();
     }
 
