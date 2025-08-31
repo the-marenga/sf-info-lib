@@ -28,6 +28,7 @@ indicatif = "0.18.0"
 sf-api = { git = "https://github.com/the-marenga/sf-api.git", branch = "other-player-pub" }
 serde_json = "*"
 flate2 = { version = "1.1.2", default-features = false, features = ["zlib"] }
+clap = { version = "4.5.46", features = ["derive"] }
 
 [features]
 default = ["db"]
