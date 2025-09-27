@@ -105,5 +105,47 @@ pub struct CrawlReport(pub HashMap<String, ServerPlayerReport>);
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Clone)]
 pub struct DetailedServerInfo {
+    pub server_id: i32,
+    pub url: String,
+    pub category: ServerCategory,
 
+    pub player_count: i64,
+    pub active_players: i64,
+    pub new_players: i64,
+
+    pub lvl_avg: i32,
+    pub last_scan_hours: u32,
+
+    pub category_rank: u32,
+    pub global_rank: u32,
+
+    pub highest_rank_guild: String,
+    pub highest_lvl_guild: String,
+    pub guild_count: u32,
+
+    pub highest_rank_player: String,
+    pub highest_lvl_player: String,
+    pub average_player_lvl: u32,
+}
+
+#[derive(Debug, Deserialize, Serialize, PartialEq, Clone)]
+pub struct ServerLevels {
+    pub total_level_distribution: Vec<u32>,
+    pub top_100_level_distribution: Vec<u32>,
+}
+
+#[derive(Debug, Deserialize, Serialize, PartialEq, Clone)]
+pub struct ServerClassDistributions {
+    pub class_total: HashMap<String, ClassDistribution>,
+    pub class_top_100: HashMap<String, ClassDistribution>,
+    pub class_lvl_300_plus: HashMap<String, ClassDistribution>,
+}
+
+#[derive(Debug, Deserialize, Serialize, PartialEq, Clone)]
+pub struct ClassDistribution {
+    pub count: u32,
+    pub active_count: u32,
+    pub lvl_avg: u32,
+    pub attributes_avg: u32,
+    pub honor_avg: u32,
 }

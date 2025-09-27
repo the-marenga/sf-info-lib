@@ -67,16 +67,19 @@ pub fn decompress_ident(ident: i32) -> EquipmentIdent {
 }
 
 pub fn ident_to_info(ident: &str) -> (String, ServerCategory) {
+    if ident == "maerwin" {
+        return (format!("{ident}@sfgame.net"), ServerCategory::Fused)
+    }
     if let Some((_, num)) = ident.split_once("eu") {
         (format!("https://s{num}.sfgame.eu/"), ServerCategory::Europe)
-    } else if let Some((_, num)) = ident.split_once("f") {
+    } else if let Some((_, num)) = ident.split_once('f') {
         (format!("https://f{num}.sfgame.net/"), ServerCategory::Fused)
     } else if let Some((_, num)) = ident.split_once("am") {
         (
             format!("https://am{num}.sfgame.net/"),
             ServerCategory::America,
         )
-    } else if let Some((_, num)) = ident.split_once("w") {
+    } else if let Some((_, num)) = ident.split_once('w') {
         (
             format!("https://w{num}.sfgame.net/"),
             ServerCategory::International,
@@ -84,4 +87,25 @@ pub fn ident_to_info(ident: &str) -> (String, ServerCategory) {
     } else {
         (String::new(), ServerCategory::Fused)
     }
+}
+
+/// Takes in the url of an official s&f server and
+pub fn url_to_info(url: &str) -> Option<(String, ServerCategory)> {
+    let (id, tld) = url
+        .trim_start_matches("https://")
+        .trim_end_matches('/')
+        .split_once(".sfgame.")?;
+
+    let shorthand = match tld {
+        "eu" => format!("eu{}", id.trim_start_matches('s')),
+        _ => id.to_string(),
+    };
+
+    let category = match tld {
+        "eu" => ServerCategory::Europe,
+        "net" if id.starts_with("am") => ServerCategory::America,
+        "net" if id.starts_with('w') => ServerCategory::International,
+        _ => ServerCategory::Fused,
+    };
+    Some((shorthand, category))
 }

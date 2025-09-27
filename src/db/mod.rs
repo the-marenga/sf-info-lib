@@ -13,11 +13,13 @@ use sf_api::gamestate::{
     unlockables::ScrapBook,
 };
 use sqlx::{Pool, Postgres, QueryBuilder, postgres::PgPoolOptions};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use zstd::stream::encode_all;
 
 use crate::{
-    common::{compress_ident, days, hours, ident_to_info, minutes},
+    common::{
+        compress_ident, days, hours, ident_to_info, minutes, url_to_info,
+    },
     error::SFSError,
     types::*,
 };
@@ -811,7 +813,7 @@ pub async fn insert_hof_pages(args: ReportHofArgs) -> Result<(), SFSError> {
 // < 9000 and attributes is not null ORDER BY LEVEL desc
 // LIMIT 50;
 
-pub async fn get_hof_player(
+pub async fn get_hof_players(
     args: GetHofPlayersArgs,
 ) -> Result<Vec<HofPlayerInfo>, SFSError> {
     let db = get_db().await?;
@@ -879,10 +881,11 @@ pub async fn handle_crawl_report(report: CrawlReport) -> Result<(), SFSError> {
     Ok(())
 }
 
+type CacheSlot<K> = LazyLock<Mutex<Option<(K, Instant)>>>;
+
 pub async fn get_servers() -> Result<Arc<[ServerInfo]>, SFSError> {
-    static RESULT_CACHE: LazyLock<
-        tokio::sync::Mutex<Option<(Arc<[ServerInfo]>, Instant)>>,
-    > = LazyLock::new(Default::default);
+    static RESULT_CACHE: CacheSlot<Arc<[ServerInfo]>> =
+        LazyLock::new(Default::default);
 
     let mut cache_res = RESULT_CACHE.lock().await;
 
@@ -933,31 +936,15 @@ pub async fn get_servers() -> Result<Arc<[ServerInfo]>, SFSError> {
     .fetch_all(&db)
     .await?;
 
-    let mut res: Vec<ServerInfo> = Default::default();
+    let mut res: Vec<ServerInfo> = Vec::new();
 
     for server_info in info {
         let Some(url) = server_ids.remove(&server_info.server_id) else {
             continue;
         };
 
-        let Some((id, tld)) = url
-            .trim_start_matches("https://")
-            .trim_end_matches('/')
-            .split_once(".sfgame.")
-        else {
+        let Some((shorthand, category)) = url_to_info(&url) else {
             continue;
-        };
-
-        let shorthand = match tld {
-            "eu" => format!("eu{}", id.trim_start_matches('s')),
-            _ => id.to_string(),
-        };
-
-        let category = match tld {
-            "eu" => ServerCategory::Europe,
-            "net" if id.starts_with("am") => ServerCategory::America,
-            "net" if id.starts_with('w') => ServerCategory::International,
-            _ => ServerCategory::Fused,
         };
 
         let info = ServerInfo {
@@ -1022,49 +1009,43 @@ pub async fn get_server_info(
 ) -> Result<Arc<DetailedServerInfo>, SFSError> {
     let (url, cat) = ident_to_info(&ident);
 
-    static RESULT_CACHE: LazyLock<
-        tokio::sync::Mutex<Option<(Arc<DetailedServerInfo>, Instant)>>,
+    static RESULT_CACHE: CacheMap<
+        String,
+        Arc<RwLock<CacheEntry<DetailedServerInfo>>>,
     > = LazyLock::new(Default::default);
 
-    let mut cache_res = RESULT_CACHE.lock().await;
+    let mut cache_res = RESULT_CACHE.read().await;
 
-    if let Some(res) = &*cache_res
-        && res.1.elapsed() < hours(6)
-    {
-        return Ok(res.0.clone());
-    }
+    todo!()
+}
 
-    let db = get_db().await?;
 
-    let info = sqlx::query!(
-        "
-        SELECT
-            server_id,
-            count(*) AS total,
-            count(*) FILTER (WHERE last_changed + interval '3 days' > now() AT \
-         TIME ZONE 'UTC' ) AS active,
-         count(*) FILTER (WHERE class = 0) AS warriors,
-         count(*) FILTER (WHERE class = 1) AS mages,
-         count(*) FILTER (WHERE class = 2) AS scouts,
-         count(*) FILTER (WHERE class = 3) AS assassins,
-         count(*) FILTER (WHERE class = 4) AS battle_mages,
-         count(*) FILTER (WHERE class = 5) AS berserkers,
-         count(*) FILTER (WHERE class = 6) AS demon_hunters,
-         count(*) FILTER (WHERE class = 7) AS druids,
-         count(*) FILTER (WHERE class = 8) AS bards,
-         count(*) FILTER (WHERE class = 9) AS necromancer,
-         count(*) FILTER (WHERE class = 10) AS paladins,
-         avg(level)::int as avg_level
-        FROM
-       	player
-            GROUP BY
-           	server_id
-            ORDER BY
-    	count(*) DESC;
-	"
-    )
-    .fetch_all(&db)
-    .await?;
+pub async fn get_server_levels(
+    ident: String,
+) -> Result<Arc<ServerLevels>, SFSError> {
+    let (url, cat) = ident_to_info(&ident);
+
+    static RESULT_CACHE: CacheMap<
+        String,
+        Arc<RwLock<CacheEntry<ServerLevels>>>,
+    > = LazyLock::new(Default::default);
+
+    let mut cache_res = RESULT_CACHE.read().await;
+
+    todo!()
+}
+
+pub async fn get_class_distribution(
+    ident: String,
+) -> Result<Arc<ServerClassDistributions>, SFSError> {
+    let (url, cat) = ident_to_info(&ident);
+
+    static RESULT_CACHE: CacheMap<
+        String,
+        Arc<RwLock<CacheEntry<ServerClassDistributions>>>,
+    > = LazyLock::new(Default::default);
+
+    let mut cache_res = RESULT_CACHE.read().await;
 
     todo!()
 }
