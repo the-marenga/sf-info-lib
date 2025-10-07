@@ -157,7 +157,7 @@ async fn read_full_player_db(
                 .insert(r.player_id as u32);
         }
         let info = CharacterInfo {
-            equipment,
+            equipment: equipment.into(),
             stats: r.attributes.unwrap_or(i64::MAX) as u64,
             player_id: r.player_id,
         };
@@ -323,7 +323,7 @@ async fn calc_best_targets(
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct CharacterInfo {
-    equipment: Vec<i32>,
+    equipment: Box<[i32]>,
     stats: u64,
     player_id: i32,
 }
