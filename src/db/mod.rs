@@ -6,6 +6,7 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
+use log::info;
 use nohash_hasher::IntMap;
 use sf_api::gamestate::{
     ServerTime,
@@ -177,9 +178,17 @@ static SERVER_PLAYER_CACHE: CacheMap<i32, Arc<PCacheValue>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 
 async fn fill_all_server_caches(db: Pool<Postgres>) -> Result<(), SFSError> {
+    let mut first_iter = true;
     loop {
+        if first_iter {
+            first_iter = false;
+        } else {
+            sleep(Duration::from_secs(60 * 60)).await;
+        }
+
         let servers = sqlx::query_scalar!(
-            "SELECT server_id FROM server WHERE last_hof_crawl >= NOW() - interval '7 days'"
+            "SELECT server_id FROM server WHERE last_hof_crawl >= NOW() - \
+             interval '7 days'"
         )
         .fetch_all(&db)
         .await?;
@@ -203,7 +212,6 @@ async fn fill_all_server_caches(db: Pool<Postgres>) -> Result<(), SFSError> {
                 log::error!("Could not fetch server data: {e}");
             }
         }
-        sleep(Duration::from_secs(60 * 60)).await;
     }
 }
 
