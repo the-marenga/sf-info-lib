@@ -134,7 +134,8 @@ async fn read_full_player_db(
         NATURAL JOIN
         (SELECT player_id, array_agg(ident) idents FROM EQUIPMENT e
         WHERE server_id = $1
-        GROUP BY player_id) equip",
+        GROUP BY player_id
+        HAVING count(*) > 3) equip",
         server_id
     )
     .fetch_all(db)
