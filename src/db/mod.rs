@@ -203,15 +203,21 @@ pub async fn get_scrapbook_advice(
             drop(sc);
             // SERVER_PLAYER_CACHE has been dropped here.
             let mut spc = SERVER_PLAYER_CACHE.write().await;
-            let res = Arc::new(read_full_player_db(&db, id).await?);
-            spc.insert(
-                id,
-                CacheEntry {
-                    result: res.clone(),
-                    insertion_time: Utc::now(),
-                },
-            );
-            res
+            if let Some(x) = spc.get(&id)
+                && x.insertion_time + hours(1) > Utc::now()
+            {
+                x.result.clone()
+            } else {
+                let res = Arc::new(read_full_player_db(&db, id).await?);
+                spc.insert(
+                    id,
+                    CacheEntry {
+                        result: res.clone(),
+                        insertion_time: Utc::now(),
+                    },
+                );
+                res
+            }
         }
     };
 
