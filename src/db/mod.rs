@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     fmt::Write,
-    sync::{Arc, LazyLock},
+    sync::{Arc, LazyLock, atomic::AtomicBool},
     time::{Duration, Instant},
 };
 
@@ -14,7 +14,11 @@ use sf_api::gamestate::{
     unlockables::ScrapBook,
 };
 use sqlx::{Pool, Postgres, QueryBuilder, postgres::PgPoolOptions};
-use tokio::sync::{Mutex, RwLock};
+use tokio::{
+    sync::{Mutex, RwLock},
+    task::JoinHandle,
+    time::sleep,
+};
 use zstd::stream::encode_all;
 
 use crate::{
@@ -125,7 +129,7 @@ async fn read_full_player_db(
 ) -> Result<PCacheValue, SFSError> {
     let now = Instant::now();
     let res = sqlx::query!(
-        "SELECT player_id, idents, name, attributes FROM player
+        "SELECT player_id, idents, attributes FROM player
         NATURAL JOIN
         (SELECT player_id, array_agg(ident) idents FROM EQUIPMENT e
         WHERE server_id = $1
@@ -153,8 +157,8 @@ async fn read_full_player_db(
         }
         let info = CharacterInfo {
             equipment,
-            name: r.name,
             stats: r.attributes.unwrap_or(i64::MAX) as u64,
+            player_id: r.player_id,
         };
         vals.player_info.insert(r.player_id as u32, info);
     }
@@ -166,6 +170,41 @@ async fn read_full_player_db(
 struct PCacheValue {
     player_info: IntMap<u32, CharacterInfo>,
     equipment: IntMap<i32, HashSet<u32>>,
+}
+
+// Maps the server_id to a list of all servers on the server
+static SERVER_PLAYER_CACHE: CacheMap<i32, Arc<PCacheValue>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
+
+async fn fill_all_server_caches(db: Pool<Postgres>) -> Result<(), SFSError> {
+    loop {
+        let servers = sqlx::query_scalar!(
+            "SELECT server_id FROM server WHERE last_hof_crawl >= NOW() - interval '7 days'"
+        )
+        .fetch_all(&db)
+        .await?;
+
+        let mut tasks = vec![];
+        for id in servers {
+            let db = db.clone();
+            let task: JoinHandle<Result<(), SFSError>> =
+                tokio::spawn(async move {
+                    let db = db.clone();
+                    let res = Arc::new(read_full_player_db(&db, id).await?);
+                    let mut spc = SERVER_PLAYER_CACHE.write().await;
+                    spc.insert(id, res.clone());
+                    drop(spc);
+                    Ok(())
+                });
+            tasks.push(task);
+        }
+        for task in tasks {
+            if let Err(e) = task.await {
+                log::error!("Could not fetch server data: {e}");
+            }
+        }
+        sleep(Duration::from_secs(60 * 60)).await;
+    }
 }
 
 /// Returns players, that have a lot of items, that are not yet in the
@@ -180,6 +219,7 @@ pub async fn get_scrapbook_advice(
         ScrapBookAdviceArgs,
         CacheEntry<Arc<[ScrapBookAdvice]>>,
     > = LazyLock::new(|| RwLock::new(HashMap::new()));
+    static HAS_STARTED_UPDATES: AtomicBool = AtomicBool::new(false);
 
     {
         let k = RESULT_CACHE.read().await;
@@ -191,49 +231,42 @@ pub async fn get_scrapbook_advice(
         }
     }
 
-    // Maps the server_id to a list of all servers on the server
-    static SERVER_PLAYER_CACHE: CacheMap<i32, CacheEntry<Arc<PCacheValue>>> =
-        LazyLock::new(|| RwLock::new(HashMap::new()));
-
     let db = get_db().await?;
+
+    if HAS_STARTED_UPDATES
+        .compare_exchange(
+            false,
+            true,
+            std::sync::atomic::Ordering::SeqCst,
+            std::sync::atomic::Ordering::SeqCst,
+        )
+        .is_ok()
+    {
+        let db = db.clone();
+        tokio::spawn(async move { fill_all_server_caches(db).await });
+    }
 
     let id = get_server_id(&db, args.server.clone()).await?;
 
-    let sc = SERVER_PLAYER_CACHE.read().await;
-    let server_data = match sc.get(&id) {
-        Some(entry) if entry.insertion_time + hours(1) > Utc::now() => {
-            let res = entry.result.clone();
-            drop(sc);
-            res
+    let server_data = loop {
+        let scp = SERVER_PLAYER_CACHE.read().await;
+        if let Some(entry) = scp.get(&id) {
+            break entry.clone();
         }
-        _ => {
-            drop(sc);
-            // SERVER_PLAYER_CACHE has been dropped here.
-            let mut spc = SERVER_PLAYER_CACHE.write().await;
-            if let Some(x) = spc.get(&id)
-                && x.insertion_time + hours(1) > Utc::now()
-            {
-                x.result.clone()
-            } else {
-                let res = Arc::new(read_full_player_db(&db, id).await?);
-                spc.insert(
-                    id,
-                    CacheEntry {
-                        result: res.clone(),
-                        insertion_time: Utc::now(),
-                    },
-                );
-                res
-            }
-        }
+        drop(scp);
+        sleep(Duration::from_secs(1)).await;
     };
 
+    let now = Instant::now();
     let res: Arc<[ScrapBookAdvice]> = calc_best_targets(
         &args,
         &server_data.player_info,
         &server_data.equipment,
+        &db,
     )
+    .await
     .into();
+    log::info!("Calculated: {:?}", now.elapsed());
 
     let now = Utc::now();
     let mut k = RESULT_CACHE.write().await;
@@ -251,10 +284,11 @@ pub async fn get_scrapbook_advice(
     Ok(res)
 }
 
-fn calc_best_targets(
+async fn calc_best_targets(
     args: &ScrapBookAdviceArgs,
     player_info: &IntMap<u32, CharacterInfo>,
     equipment: &IntMap<i32, HashSet<u32>>,
+    db: &Pool<Postgres>,
 ) -> Vec<ScrapBookAdvice> {
     let result_limit = 10;
     let Some(scrapbook) = ScrapBook::parse(&args.raw_scrapbook) else {
@@ -271,7 +305,8 @@ fn calc_best_targets(
         args.max_attrs,
     );
 
-    let mut best = find_best(&per_player_counts, player_info, result_limit);
+    let mut best =
+        find_best(&per_player_counts, player_info, result_limit, db).await;
     best.sort_by(|a, b| {
         b.new_count.cmp(&a.new_count).then(a.stats.cmp(&b.stats))
     });
@@ -281,8 +316,8 @@ fn calc_best_targets(
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct CharacterInfo {
     equipment: Vec<i32>,
-    name: String,
     stats: u64,
+    player_id: i32,
 }
 
 pub fn calc_per_player_count(
@@ -319,10 +354,11 @@ pub fn calc_per_player_count(
     per_player_counts
 }
 
-fn find_best(
+async fn find_best(
     per_player_counts: &HashMap<u32, usize>,
     player_info: &IntMap<u32, CharacterInfo>,
     max_out: usize,
+    db: &Pool<Postgres>,
 ) -> Vec<ScrapBookAdvice> {
     // Prune the counts to make computation faster
     let mut max = 1;
@@ -338,22 +374,42 @@ fn find_best(
     let mut best_players = Vec::new();
     for (count, players) in counts.iter().enumerate().rev() {
         best_players.extend(
-            players.iter().flat_map(|a| player_info.get(a)).map(|a| {
-                ScrapBookAdvice {
-                    new_count: (count + 1) as u32,
-                    player_name: a.name.clone(),
-                    stats: a.stats,
-                }
-            }),
+            players
+                .iter()
+                .flat_map(|a| player_info.get(a))
+                .map(|a| ((count + 1) as u32, a)),
         );
         if best_players.len() >= max_out {
             break;
         }
     }
-    best_players.sort_by(|a, b| b.cmp(a));
+    best_players.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.stats.cmp(&b.1.stats)));
     best_players.truncate(max_out);
 
+    let winner_ids: Vec<_> =
+        best_players.iter().map(|a| a.1.player_id).collect();
+    let names = sqlx::query!(
+        "SELECT player_id, name FROM player WHERE player_id = ANY($1)",
+        winner_ids.as_slice()
+    )
+    .fetch_all(db)
+    .await
+    .unwrap();
+
+    let names: HashMap<_, _> =
+        names.into_iter().map(|a| (a.player_id, a.name)).collect();
+
     best_players
+        .into_iter()
+        .map(|a| ScrapBookAdvice {
+            player_name: names
+                .get(&a.1.player_id)
+                .cloned()
+                .unwrap_or_else(|| a.0.to_string()),
+            new_count: a.0,
+            stats: a.1.stats,
+        })
+        .collect()
 }
 
 pub async fn mark_removed(
