@@ -43,11 +43,13 @@ pub struct ScrapBookAdviceArgs {
     pub max_attrs: u64,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord, Clone)]
 #[cfg_attr(feature = "db", derive(sqlx::prelude::FromRow))]
 pub struct ScrapBookAdvice {
     pub player_name: String,
     pub new_count: u32,
+    #[serde(skip)]
+    pub stats: u64,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

@@ -1,5 +1,6 @@
-use std::io::Write;
+use std::io::{Read, Write};
 
+use flate2::{bufread::ZlibEncoder, Compression};
 use sf_info_lib::db::get_db;
 use sqlx::{Pool, Postgres};
 
@@ -19,7 +20,7 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .fetch_all(&db)
     .await?;
 
-    for server_id in server_ids.into_iter().take(1) {
+    for server_id in server_ids {
         let mut data: Vec<u8> = b"ZHOF3_01".into();
         let players = sqlx::query!(
             "SELECT
@@ -56,7 +57,12 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        tokio::fs::write(format!("{server_id}.zhof3"), &data).await?;
+        let mut encoder =
+            ZlibEncoder::new(data.as_ref(), Compression::best());
+        let mut res = Vec::new();
+        encoder.read_to_end(&mut res).unwrap();
+
+        tokio::fs::write(format!("{server_id}.zhof2"), &res).await?;
     }
 
     Ok(())

@@ -1,11 +1,12 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fmt::Write,
     sync::{Arc, LazyLock},
     time::{Duration, Instant},
 };
 
 use chrono::{DateTime, Utc};
+use nohash_hasher::IntMap;
 use sf_api::gamestate::{
     ServerTime,
     items::Equipment,
@@ -118,6 +119,48 @@ struct CacheEntry<T> {
 
 type CacheMap<K, V> = LazyLock<RwLock<HashMap<K, V>>>;
 
+async fn read_full_player_db(
+    db: &Pool<Postgres>,
+    server_id: i32,
+) -> Result<PCacheValue, SFSError> {
+    let res = sqlx::query!(
+        "SELECT player_id, idents, name, attributes FROM player
+        NATURAL JOIN
+        (SELECT player_id, array_agg(ident) idents FROM EQUIPMENT e
+        WHERE server_id = $1
+        GROUP BY player_id) equip",
+        server_id
+    )
+    .fetch_all(db)
+    .await?;
+
+    let mut vals = PCacheValue::default();
+
+    for r in res {
+        let equipment = r.idents.unwrap_or_default();
+        for a in &equipment {
+            vals.equipment
+                .entry(*a)
+                .or_default()
+                .insert(r.player_id as u32);
+        }
+        let info = CharacterInfo {
+            equipment,
+            name: r.name,
+            stats: r.attributes.unwrap_or(i64::MAX) as u64,
+        };
+        vals.player_info.insert(r.player_id as u32, info);
+    }
+
+    Ok(vals)
+}
+
+#[derive(Debug, Default)]
+struct PCacheValue {
+    player_info: IntMap<u32, CharacterInfo>,
+    equipment: IntMap<i32, HashSet<u32>>,
+}
+
 /// Returns players, that have a lot of items, that are not yet in the
 /// scrapbook. Evaluating ALL players can be prohibitively slow (> 20 secs),
 /// so we look at progressively larger chunks of the playerbase until we find
@@ -130,130 +173,174 @@ pub async fn get_scrapbook_advice(
         ScrapBookAdviceArgs,
         CacheEntry<Arc<[ScrapBookAdvice]>>,
     > = LazyLock::new(|| RwLock::new(HashMap::new()));
+
     {
         let k = RESULT_CACHE.read().await;
-        if let Some(entry) = k.get(&args) {
-            if entry.insertion_time + hours(1) > Utc::now() {
-                log::info!("Skipped sb advice using cache");
-                return Ok(entry.result.clone());
-            }
+        if let Some(entry) = k.get(&args)
+            && entry.insertion_time + hours(1) > Utc::now()
+        {
+            log::info!("Skipped sb advice using cache");
+            return Ok(entry.result.clone());
         }
     }
 
-    let sb = ScrapBook::parse(&args.raw_scrapbook)
-        .ok_or(SFSError::InvalidScrapbook)?;
-    let collected: Vec<i32> =
-        sb.items.into_iter().map(compress_ident).collect();
+    // Maps the server_id to a list of all servers on the server
+    static SERVER_PLAYER_CACHE: CacheMap<i32, CacheEntry<Arc<PCacheValue>>> =
+        LazyLock::new(|| RwLock::new(HashMap::new()));
 
-    log::info!("New sb query: {}", collected.len());
     let db = get_db().await?;
-    let server_id = get_server_id(&db, args.server.clone()).await?;
 
-    let good_amount = match collected.len() {
-        ..200 => 9,
-        200..500 => 8,
-        500..1000 => 7,
-        1000..1300 => 6,
-        1300..1400 => 5,
-        1400..1600 => 4,
-        1600..1682 => 3,
-        _ => return Ok(Arc::default()),
-    };
+    let id = get_server_id(&db, args.server.clone()).await?;
 
-    let attempts = [10_000, 100_000, 1_000_000, 100_000_000];
-    let now = Instant::now();
-    for (attempt, limit) in attempts.into_iter().enumerate() {
-        let result = sqlx::query!(
-            "
-            WITH filtered_equipment AS (
-            SELECT player_id, attributes
-            FROM equipment
-            WHERE server_id = $1
-                AND ident != ALL($2::integer[])
-                AND attributes <= $3
-            order by ATTRIBUTES
-            LIMIT $4
-            )
-            SELECT
-            player_id, count(*) AS new_count, attributes
-            FROM filtered_equipment
-            GROUP BY player_id, attributes
-            ORDER BY new_count DESC, attributes
-            LIMIT 20",
-            server_id,
-            collected.as_slice(),
-            args.max_attrs as i64,
-            limit
-        )
-        .fetch_all(&db)
-        .await?;
-
-        if attempt + 1 == attempts.len()
-            || result
-                .first()
-                .is_some_and(|a| a.new_count.unwrap_or(0) >= good_amount)
-        {
-            if result.is_empty() {
-                let now = Utc::now();
-                let mut k = RESULT_CACHE.write().await;
-                k.insert(
-                    args,
-                    CacheEntry {
-                        result: Arc::default(),
-                        insertion_time: now,
-                    },
-                );
-                return Ok(Arc::default());
-            }
-            let ids: Vec<_> = result.iter().map(|a| a.player_id).collect();
-
-            let mut names: HashMap<i32, String> = sqlx::query!(
-                "SELECT name, player_id FROM player WHERE player_id = \
-                 ANY($1::integer[])",
-                &ids
-            )
-            .fetch_all(&db)
-            .await?
-            .into_iter()
-            .map(|a| (a.player_id, a.name))
-            .collect();
-
-            log::info!(
-                "Request for sb {} took {:?} and {attempt} attempts => {}",
-                collected.len(),
-                now.elapsed(),
-                result.first().and_then(|a| a.new_count).unwrap_or(-1)
-            );
-
-            let res: Arc<_> = result
-                .into_iter()
-                .filter_map(|a| {
-                    Some(ScrapBookAdvice {
-                        player_name: names.remove(&a.player_id)?,
-                        new_count: a.new_count? as u32,
-                    })
-                })
-                .collect();
-
-            let now = Utc::now();
-            let mut k = RESULT_CACHE.write().await;
-            k.insert(
-                args,
+    let sc = SERVER_PLAYER_CACHE.read().await;
+    let server_data = match sc.get(&id) {
+        Some(entry) if entry.insertion_time + hours(1) > Utc::now() => {
+            let res = entry.result.clone();
+            drop(sc);
+            res
+        }
+        _ => {
+            drop(sc);
+            // SERVER_PLAYER_CACHE has been dropped here.
+            let mut spc = SERVER_PLAYER_CACHE.write().await;
+            let res = Arc::new(read_full_player_db(&db, id).await?);
+            spc.insert(
+                id,
                 CacheEntry {
                     result: res.clone(),
-                    insertion_time: now,
+                    insertion_time: Utc::now(),
                 },
             );
+            res
+        }
+    };
 
-            if fastrand::u64(..10_000) == 0 {
-                k.retain(|_, v| v.insertion_time + hours(1) > now);
-            }
+    let res: Arc<[ScrapBookAdvice]> = calc_best_targets(
+        &args,
+        &server_data.player_info,
+        &server_data.equipment,
+    )
+    .into();
 
-            return Ok(res);
+    let now = Utc::now();
+    let mut k = RESULT_CACHE.write().await;
+    k.insert(
+        args,
+        CacheEntry {
+            result: res.clone(),
+            insertion_time: now,
+        },
+    );
+
+    if fastrand::u64(..10_000) == 0 {
+        k.retain(|_, v| v.insertion_time + hours(1) > now);
+    }
+    Ok(res)
+}
+
+fn calc_best_targets(
+    args: &ScrapBookAdviceArgs,
+    player_info: &IntMap<u32, CharacterInfo>,
+    equipment: &IntMap<i32, HashSet<u32>>,
+) -> Vec<ScrapBookAdvice> {
+    let result_limit = 10;
+    let Some(scrapbook) = ScrapBook::parse(&args.raw_scrapbook) else {
+        return vec![];
+    };
+
+    let scrapbook: HashSet<i32> =
+        scrapbook.items.into_iter().map(compress_ident).collect();
+
+    let per_player_counts = calc_per_player_count(
+        player_info,
+        equipment,
+        &scrapbook,
+        args.max_attrs,
+    );
+
+    let mut best = find_best(&per_player_counts, player_info, result_limit);
+    best.sort_by(|a, b| {
+        b.new_count.cmp(&a.new_count).then(a.stats.cmp(&b.stats))
+    });
+    best
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct CharacterInfo {
+    equipment: Vec<i32>,
+    name: String,
+    stats: u64,
+}
+
+pub fn calc_per_player_count(
+    // player => Detailed info
+    player_info: &IntMap<u32, CharacterInfo>,
+    // equipment => players
+    equipment: &IntMap<i32, HashSet<u32>>,
+    // the items the player already has
+    scrapbook: &HashSet<i32>,
+    max_attrs: u64,
+) -> HashMap<u32, usize> {
+    let mut per_player_counts = HashMap::default();
+    per_player_counts.reserve(player_info.len());
+
+    for (eq, players) in equipment {
+        if scrapbook.contains(eq) {
+            continue;
+        }
+        for player in players {
+            *per_player_counts.entry(*player).or_insert(0) += 1;
         }
     }
 
-    Err(SFSError::Internal("Did not fetch any scrapbook results"))
+    per_player_counts.retain(|a, _| {
+        let Some(info) = player_info.get(a) else {
+            return false;
+        };
+
+        if info.stats > max_attrs {
+            return false;
+        }
+        true
+    });
+    per_player_counts
+}
+
+fn find_best(
+    per_player_counts: &HashMap<u32, usize>,
+    player_info: &IntMap<u32, CharacterInfo>,
+    max_out: usize,
+) -> Vec<ScrapBookAdvice> {
+    // Prune the counts to make computation faster
+    let mut max = 1;
+    let mut counts = [(); 10].map(|_| vec![]);
+    for (player, count) in per_player_counts.iter().map(|a| (*a.0, *a.1)) {
+        if max_out == 1 && count < max || count == 0 {
+            continue;
+        }
+        max = max.max(count);
+        counts[(count - 1).clamp(0, 9)].push(player);
+    }
+
+    let mut best_players = Vec::new();
+    for (count, players) in counts.iter().enumerate().rev() {
+        best_players.extend(
+            players.iter().flat_map(|a| player_info.get(a)).map(|a| {
+                ScrapBookAdvice {
+                    new_count: (count + 1) as u32,
+                    player_name: a.name.clone(),
+                    stats: a.stats,
+                }
+            }),
+        );
+        if best_players.len() >= max_out {
+            break;
+        }
+    }
+    best_players.sort_by(|a, b| b.cmp(a));
+    best_players.truncate(max_out);
+
+    best_players
 }
 
 pub async fn mark_removed(
@@ -1018,7 +1105,6 @@ pub async fn get_server_info(
 
     todo!()
 }
-
 
 pub async fn get_server_levels(
     ident: String,

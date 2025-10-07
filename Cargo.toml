@@ -20,6 +20,7 @@ url = { version = "2.5", optional = true }
 tokio = { version = "1.47", optional = true }
 fastrand = { version = "2.3", optional = true }
 zstd = { version = "0.13.3", optional = true }
+nohash-hasher = "0.2.0"
 
 [dev-dependencies]
 tokio = { version = "1.47", features = ["full"] }
