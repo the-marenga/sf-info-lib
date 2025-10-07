@@ -123,6 +123,7 @@ async fn read_full_player_db(
     db: &Pool<Postgres>,
     server_id: i32,
 ) -> Result<PCacheValue, SFSError> {
+    let now = Instant::now();
     let res = sqlx::query!(
         "SELECT player_id, idents, name, attributes FROM player
         NATURAL JOIN
@@ -133,6 +134,12 @@ async fn read_full_player_db(
     )
     .fetch_all(db)
     .await?;
+
+    log::info!(
+        "Read {server_id}'s {} players in {:?}",
+        res.len(),
+        now.elapsed()
+    );
 
     let mut vals = PCacheValue::default();
 
