@@ -130,12 +130,14 @@ async fn read_full_player_db(
 ) -> Result<PCacheValue, SFSError> {
     let now = Instant::now();
     let res = sqlx::query!(
-        "SELECT player_id, idents, attributes FROM player
+        "SELECT player_id, idents, attributes
+        FROM player
         NATURAL JOIN
         (SELECT player_id, array_agg(ident) idents FROM EQUIPMENT e
         WHERE server_id = $1
         GROUP BY player_id
-        HAVING count(*) > 3) equip",
+        HAVING count(*) > 3) equip
+        WHERE is_removed = FALSE",
         server_id
     )
     .fetch_all(db)
