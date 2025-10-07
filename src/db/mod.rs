@@ -183,9 +183,7 @@ static SERVER_PLAYER_CACHE: CacheMap<i32, Arc<PCacheValue>> =
 async fn fill_all_server_caches(db: Pool<Postgres>) -> Result<(), SFSError> {
     let mut first_iter = true;
     loop {
-        if first_iter {
-            first_iter = false;
-        } else {
+        if !first_iter {
             sleep(Duration::from_secs(60 * 60)).await;
         }
 
@@ -208,8 +206,13 @@ async fn fill_all_server_caches(db: Pool<Postgres>) -> Result<(), SFSError> {
                     drop(spc);
                     Ok(())
                 });
-            tasks.push(task);
+            if first_iter {
+                tasks.push(task);
+            } else {
+                task.await;
+            }
         }
+        first_iter = false;
         for task in tasks {
             if let Err(e) = task.await {
                 log::error!("Could not fetch server data: {e}");
