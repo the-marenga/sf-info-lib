@@ -6,7 +6,6 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
-use log::info;
 use nohash_hasher::IntMap;
 use sf_api::gamestate::{
     ServerTime,
@@ -151,13 +150,12 @@ async fn read_full_player_db(
 
     let mut vals = PCacheValue::default();
 
+    let mut equip: HashMap<i32, HashSet<u32>> = HashMap::new();
+
     for r in res {
         let equipment = r.idents.unwrap_or_default();
         for a in &equipment {
-            vals.equipment
-                .entry(*a)
-                .or_default()
-                .insert(r.player_id as u32);
+            equip.entry(*a).or_default().insert(r.player_id as u32);
         }
         let info = CharacterInfo {
             equipment: equipment.into(),
@@ -166,14 +164,25 @@ async fn read_full_player_db(
         };
         vals.player_info.insert(r.player_id as u32, info);
     }
-
+    let mut saved = 0;
+    let mut total = 1;
+    vals.equipment = equip
+        .into_iter()
+        .map(|(e_ident, players)| {
+            saved += players.capacity() - players.len();
+            total += players.capacity();
+            (e_ident, players.into_iter().collect())
+        })
+        .collect();
+    log::info!("Saved {}%", (saved as f32 / total as f32) * 100.0);
     Ok(vals)
 }
 
 #[derive(Debug, Default)]
 struct PCacheValue {
     player_info: IntMap<u32, CharacterInfo>,
-    equipment: IntMap<i32, HashSet<u32>>,
+    // Equipment id => player ids
+    equipment: IntMap<i32, Box<[u32]>>,
 }
 
 // Maps the server_id to a list of all servers on the server
@@ -188,8 +197,9 @@ async fn fill_all_server_caches(db: Pool<Postgres>) -> Result<(), SFSError> {
         }
 
         let servers = sqlx::query_scalar!(
-            "SELECT server_id FROM server WHERE last_hof_crawl >= NOW() - \
-             interval '7 days'"
+            "SELECT server_id
+            FROM server
+            WHERE last_hof_crawl >= NOW() - interval '7 days'"
         )
         .fetch_all(&db)
         .await?;
@@ -209,7 +219,7 @@ async fn fill_all_server_caches(db: Pool<Postgres>) -> Result<(), SFSError> {
             if first_iter {
                 tasks.push(task);
             } else {
-                task.await;
+                _ = task.await;
             }
         }
         first_iter = false;
@@ -262,13 +272,12 @@ pub async fn get_scrapbook_advice(
 
     let id = get_server_id(&db, args.server.clone()).await?;
 
-    let server_data = loop {
+    let server_data = {
         let scp = SERVER_PLAYER_CACHE.read().await;
-        if let Some(entry) = scp.get(&id) {
-            break entry.clone();
-        }
-        drop(scp);
-        sleep(Duration::from_secs(1)).await;
+        let Some(entry) = scp.get(&id) else {
+            return Ok(Arc::default());
+        };
+        entry.clone()
     };
 
     let now = Instant::now();
@@ -301,7 +310,7 @@ pub async fn get_scrapbook_advice(
 async fn calc_best_targets(
     args: &ScrapBookAdviceArgs,
     player_info: &IntMap<u32, CharacterInfo>,
-    equipment: &IntMap<i32, HashSet<u32>>,
+    equipment: &IntMap<i32, Box<[u32]>>,
     db: &Pool<Postgres>,
 ) -> Vec<ScrapBookAdvice> {
     let result_limit = 10;
@@ -338,7 +347,7 @@ pub fn calc_per_player_count(
     // player => Detailed info
     player_info: &IntMap<u32, CharacterInfo>,
     // equipment => players
-    equipment: &IntMap<i32, HashSet<u32>>,
+    equipment: &IntMap<i32, Box<[u32]>>,
     // the items the player already has
     scrapbook: &HashSet<i32>,
     max_attrs: u64,
@@ -390,7 +399,7 @@ async fn find_best(
         best_players.extend(
             players
                 .iter()
-                .flat_map(|a| player_info.get(a))
+                .filter_map(|a| player_info.get(a))
                 .map(|a| ((count + 1) as u32, a)),
         );
         if best_players.len() >= max_out {
