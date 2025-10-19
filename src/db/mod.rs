@@ -199,7 +199,7 @@ async fn fill_all_server_caches(db: Pool<Postgres>) -> Result<(), SFSError> {
         let servers = sqlx::query_scalar!(
             "SELECT server_id
             FROM server
-            -- WHERE last_hof_crawl >= NOW() - interval '7 days'"
+            WHERE last_hof_crawl >= NOW() - interval '7 days'"
         )
         .fetch_all(&db)
         .await?;
