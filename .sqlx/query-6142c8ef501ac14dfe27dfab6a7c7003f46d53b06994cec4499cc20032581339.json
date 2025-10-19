@@ -1,0 +1,42 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH paginated_players AS (\n            SELECT player.name, guild_id, player.level, player.honor\n            FROM player\n            WHERE server_id = $1\n              AND honor IS NOT NULL\n              AND is_removed = FALSE\n              ORDER BY honor DESC, player_id\n            OFFSET $2\n            LIMIT $3\n        )\n        SELECT p.name as player_name, g.name as guild_name, p.honor, p.level\n        FROM paginated_players p\n        LEFT JOIN guild g ON g.guild_id = p.guild_id\n        ORDER BY honor DESC\n    ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "player_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "guild_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "honor",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "level",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "6142c8ef501ac14dfe27dfab6a7c7003f46d53b06994cec4499cc20032581339"
+}

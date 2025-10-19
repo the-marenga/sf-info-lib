@@ -129,14 +129,9 @@ async fn read_full_player_db(
 ) -> Result<PCacheValue, SFSError> {
     let now = Instant::now();
     let res = sqlx::query!(
-        "SELECT player_id, idents, attributes
+        "SELECT player_id, attributes, equipment
         FROM player
-        NATURAL JOIN
-        (SELECT player_id, array_agg(ident) idents FROM EQUIPMENT e
-        WHERE server_id = $1
-        GROUP BY player_id
-        HAVING count(*) > 3) equip
-        WHERE is_removed = FALSE",
+        WHERE server_id = $1 AND is_removed = FALSE",
         server_id
     )
     .fetch_all(db)
@@ -153,8 +148,15 @@ async fn read_full_player_db(
     let mut equip: HashMap<i32, HashSet<u32>> = HashMap::new();
 
     for r in res {
-        for equip_ident in r.idents.unwrap_or_default() {
-            equip.entry(equip_ident).or_default().insert(r.player_id as u32);
+        let idents = r.equipment.unwrap_or_default();
+        if idents.is_empty() {
+            continue;
+        }
+        for equip_ident in idents {
+            equip
+                .entry(equip_ident)
+                .or_default()
+                .insert(r.player_id as u32);
         }
         let info = CharacterInfo {
             stats: r.attributes.unwrap_or(i64::MAX) as u64,
@@ -197,7 +199,7 @@ async fn fill_all_server_caches(db: Pool<Postgres>) -> Result<(), SFSError> {
         let servers = sqlx::query_scalar!(
             "SELECT server_id
             FROM server
-            WHERE last_hof_crawl >= NOW() - interval '7 days'"
+            -- WHERE last_hof_crawl >= NOW() - interval '7 days'"
         )
         .fetch_all(&db)
         .await?;
@@ -595,7 +597,7 @@ pub async fn insert_player(
         guild_id = id;
     }
 
-    let (pid, has_changed) = if let Some(existing) = existing {
+    let pid = if let Some(existing) = existing {
         if existing.last_reported.is_some_and(|a| a >= fetch_time) {
             log::warn!("Discarded player update for {player_name}");
             return Ok(());
@@ -642,7 +644,7 @@ pub async fn insert_player(
             SET level = $1, attributes = $2, next_report_attempt = $3,
                 last_reported = $4, last_changed = $5, equip_count = $6, xp = \
              $7, honor = $8, guild_id = $10, class = $11, server_player_id = \
-             $12
+             $12, equipment = $13
             WHERE player_id = $9",
             i32::from(other.level),
             attributes,
@@ -655,21 +657,22 @@ pub async fn insert_player(
             existing.player_id,
             guild_id,
             other.class as i16,
-            other.player_id as i32
+            other.player_id as i32,
+            &equip_idents
         )
         .execute(&mut *tx)
         .await?;
-        (existing.player_id, has_changed)
+        existing.player_id
     } else {
         let next_attempt = fetch_time + days(1);
         // Insert a new player and so far unseen player. This is very unlikely
         // since players should be created after HoF search
-        let pid = sqlx::query_scalar!(
+        sqlx::query_scalar!(
             "INSERT INTO player
             (server_id, name, level, attributes, next_report_attempt, \
              last_reported, last_changed, equip_count, xp, honor, guild_id, \
-             class, server_player_id)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+             class, server_player_id, equipment)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
             RETURNING player_id",
             server_id,
             player_name,
@@ -683,11 +686,11 @@ pub async fn insert_player(
             other.honor as i32,
             guild_id,
             other.class as i16,
-            other.player_id as i32
+            other.player_id as i32,
+            &equip_idents
         )
         .fetch_one(&mut *tx)
-        .await?;
-        (pid, true)
+        .await?
     };
 
     let description = player.description.unwrap_or_default();
@@ -746,7 +749,7 @@ pub async fn insert_player(
         "INSERT INTO player_info (player_id, fetch_time, xp, level, \
          soldier_advice, description_id, guild_id, otherplayer_resp_id, \
          honor, rank)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, $10)",
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
         pid,
         fetch_time,
         experience,
@@ -761,27 +764,6 @@ pub async fn insert_player(
     .execute(&mut *tx)
     .await?;
 
-    if !has_changed {
-        return Ok(tx.commit().await?);
-    }
-
-    sqlx::query!("DELETE FROM equipment WHERE player_id = $1", pid)
-        .execute(&mut *tx)
-        .await?;
-    if equip_idents.is_empty() {
-        return Ok(tx.commit().await?);
-    }
-
-    let mut builder = QueryBuilder::new(
-        "INSERT INTO equipment (server_id, player_id, ident, attributes) ",
-    );
-    builder.push_values(equip_idents, |mut b, ident| {
-        b.push_bind(server_id)
-            .push_bind(pid)
-            .push_bind(ident)
-            .push_bind(attributes as i32);
-    });
-    builder.build().execute(&mut *tx).await?;
     return Ok(tx.commit().await?);
 }
 

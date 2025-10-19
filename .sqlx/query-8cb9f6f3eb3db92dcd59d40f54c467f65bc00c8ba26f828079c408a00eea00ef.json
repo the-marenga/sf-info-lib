@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT player_id, attributes, equipment\n        FROM player\n        WHERE server_id = $1 AND is_removed = FALSE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "player_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "attributes",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "equipment",
+        "type_info": "Int4Array"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "8cb9f6f3eb3db92dcd59d40f54c467f65bc00c8ba26f828079c408a00eea00ef"
+}

@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH cte AS (\n          SELECT player_id\n          FROM player\n          WHERE server_id = $1\n            AND next_report_attempt < $2\n            AND is_removed = false\n          -- This forced an index to be used in my testing. Could also make\n          -- things worse, will have to test\n          ORDER BY next_report_attempt\n          LIMIT $3\n          FOR NO KEY UPDATE)\n        UPDATE player\n        SET next_report_attempt = $4\n        WHERE player_id IN (SELECT player_id FROM cte)\n        RETURNING name",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Timestamp",
+        "Int8",
+        "Timestamp"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "4b1819dae210e16259115bf7f2d6f1bc134cf81d31d508bc603462bd2fe9072e"
+}

@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT server_id\n            FROM server\n            -- WHERE last_hof_crawl >= NOW() - interval '7 days'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "server_id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "644411939f0919c4a23837d7951c3fdebc74094e5ba52afb79906aec6be848bd"
+}

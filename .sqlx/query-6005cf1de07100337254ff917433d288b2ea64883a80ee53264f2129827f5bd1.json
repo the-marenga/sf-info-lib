@@ -1,17 +1,17 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT name, player_id FROM player WHERE player_id = ANY($1::integer[])",
+  "query": "SELECT player_id, name FROM player WHERE player_id = ANY($1)",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "name",
-        "type_info": "Text"
+        "name": "player_id",
+        "type_info": "Int4"
       },
       {
         "ordinal": 1,
-        "name": "player_id",
-        "type_info": "Int4"
+        "name": "name",
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -24,5 +24,5 @@
       false
     ]
   },
-  "hash": "9232699b3fcd101186b6e0d301637aa99b99348dde199611ea35296e4c493577"
+  "hash": "6005cf1de07100337254ff917433d288b2ea64883a80ee53264f2129827f5bd1"
 }

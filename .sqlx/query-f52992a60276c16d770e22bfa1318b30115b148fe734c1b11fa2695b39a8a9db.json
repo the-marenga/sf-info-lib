@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO player\n            (server_id, name, level, attributes, next_report_attempt, last_reported, last_changed, equip_count, xp, honor, guild_id, class, server_player_id)\n            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)\n            RETURNING player_id",
+  "query": "INSERT INTO player\n            (server_id, name, level, attributes, next_report_attempt, last_reported, last_changed, equip_count, xp, honor, guild_id, class, server_player_id, equipment)\n            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)\n            RETURNING player_id",
   "describe": {
     "columns": [
       {
@@ -23,12 +23,13 @@
         "Int4",
         "Int4",
         "Int2",
-        "Int4"
+        "Int4",
+        "Int4Array"
       ]
     },
     "nullable": [
       false
     ]
   },
-  "hash": "88ed5cb6a0149563f0fe0255e7f53d5f9a58b23b95346d94f20e5923a3028998"
+  "hash": "f52992a60276c16d770e22bfa1318b30115b148fe734c1b11fa2695b39a8a9db"
 }

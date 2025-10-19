@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO player_info (player_id, fetch_time, xp, level, soldier_advice, description_id, guild_id, otherplayer_resp_id, honor, rank)\n        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, $10)",
+  "query": "INSERT INTO player_info (player_id, fetch_time, xp, level, soldier_advice, description_id, guild_id, otherplayer_resp_id, honor, rank)\n        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
   "describe": {
     "columns": [],
     "parameters": {
@@ -19,5 +19,5 @@
     },
     "nullable": []
   },
-  "hash": "b67add82a27729b2421806cbe93e7b7ad199fe50a27bd5183537acda77bc9622"
+  "hash": "068a3d0fb288a7efc4f8e4f4f8eb7b735398374cd4c527309e57b6db01f0b9bd"
 }

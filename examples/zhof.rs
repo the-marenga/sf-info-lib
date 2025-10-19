@@ -98,13 +98,9 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
         bar.set_message("Loading player data");
 
         let players = sqlx::query!(
-            "SELECT
-                name, level, server_player_id, array_agg(ident) as idents
+            "SELECT name, level, server_player_id, equipment
             FROM player
-            JOIN equipment on equipment.player_id = player.player_id
-            WHERE player.server_id = $1 AND is_removed = FALSE AND level is \
-             not null
-            GROUP BY name, level, server_player_id
+            WHERE player.server_id = $1 AND is_removed = FALSE AND level is not null
             ",
             server.server_id
         )
@@ -123,7 +119,7 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             let equipment: Vec<_> = rec
-                .idents
+                .equipment
                 .unwrap_or_default()
                 .into_iter()
                 .map(decompress_ident)
