@@ -736,7 +736,7 @@ pub async fn insert_player(
         None => {
             sqlx::query_scalar!(
                 "INSERT INTO otherplayer_resp (otherplayer_resp, version)
-                VALUES ($1, 2)
+                VALUES ($1, 3)
                 RETURNING otherplayer_resp_id",
                 &resp,
             )
@@ -767,7 +767,7 @@ pub async fn insert_player(
     return Ok(tx.commit().await?);
 }
 
-static STORED_SPLIT_CHAR: char = '🎆';
+pub static STORED_SPLIT_CHAR: char = '🎆';
 
 pub fn reencode_response(
     data: &[i64],
@@ -788,8 +788,10 @@ pub fn reencode_response(
                 .map_err(|_| SFSError::Internal("Reencode"))?;
         }
     }
-    new_raw_resp.push(STORED_SPLIT_CHAR);
-    new_raw_resp.push_str(equip_data);
+    if !equip_data.is_empty() {
+        new_raw_resp.push(STORED_SPLIT_CHAR);
+        new_raw_resp.push_str(equip_data);
+    }
     Ok(new_raw_resp)
 }
 
