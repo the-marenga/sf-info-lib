@@ -778,8 +778,9 @@ pub fn reencode_response(
         if !new_raw_resp.is_empty() {
             new_raw_resp.push('/');
         }
-        if pos == 6 {
-            // Remove rank, since that changes for
+        if pos == 6 || pos == 5 {
+            // Remove rank & honor, since that changes even if the player is
+            // inactive
             new_raw_resp.push('0');
         } else {
             new_raw_resp
