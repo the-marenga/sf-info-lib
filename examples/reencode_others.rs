@@ -6,6 +6,12 @@ use zstd::{decode_all, encode_all};
 pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db = get_db().await?;
 
+    sqlx::query!(
+        "CREATE INDEX IF NOT EXISTS player_info_otherplayer_resp_id_idx
+        ON player_info (otherplayer_resp_id)")
+        .execute(&db)
+        .await?;
+
     let mut player_ids: Vec<i32> =
         sqlx::query_scalar!("SELECT player_id FROM player")
             .fetch_all(&db)
@@ -31,12 +37,12 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .fetch_all(&db)
                     .await?;
 
-                    for id in response_ids {
+                    for old_id in response_ids {
                         let response = sqlx::query_scalar!(
                             "SELECT otherplayer_resp
                             FROM otherplayer_resp
                             WHERE otherplayer_resp_id = $1 AND version < 3",
-                            id
+                            old_id
                         )
                         .fetch_optional(&db)
                         .await?;
@@ -85,20 +91,28 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .await?
                             }
                         };
-                        if new_id == id {
+                        if new_id == old_id {
                             continue;
                         }
 
                         sqlx::query!(
                             "UPDATE player_info
                             SET otherplayer_resp_id = $1
-                            WHERE player_id = $2 AND otherplayer_resp_id = $3",
+                            WHERE otherplayer_resp_id = $2",
                             new_id,
-                            player_id,
-                            id
+                            old_id
                         )
                         .execute(&mut *tx)
                         .await?;
+
+                        sqlx::query!(
+                            "DELETE FROM otherplayer_resp
+                            WHERE otherplayer_resp_id = $1",
+                            old_id
+                        )
+                        .execute(&mut *tx)
+                        .await?;
+
                         tx.commit().await?;
                     }
                     Ok(())
