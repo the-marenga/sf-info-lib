@@ -1,6 +1,7 @@
 use futures::StreamExt;
 use sf_info_lib::db::{STORED_SPLIT_CHAR, get_db, reencode_response};
 use zstd::{decode_all, encode_all};
+use tokio::task;
 
 #[tokio::main]
 pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -39,7 +40,8 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         return Ok(());
                     };
 
-                    let decoded = decode_all(response.as_slice())?;
+                    let decoded = task::spawn_blocking(move || decode_all(response.as_slice()))
+                        .await??;
                     let decoded = String::from_utf8(decoded)?;
                     let (otherplayer, equipment) =
                         match decoded.split_once(STORED_SPLIT_CHAR) {
@@ -54,7 +56,8 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let data = data?;
 
                     let new_raw_resp = reencode_response(&data, equipment)?;
-                    let resp = encode_all(new_raw_resp.as_bytes(), 3)?;
+                    let resp = task::spawn_blocking(move || encode_all(new_raw_resp.as_bytes(), 3))
+                        .await??;
 
                     let mut tx = db.begin().await?;
                     let response_id = sqlx::query_scalar!(
@@ -79,6 +82,7 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             .await?
                         }
                     };
+
                     if new_id == old_id {
                         return Ok(());
                     }
