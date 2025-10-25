@@ -1,7 +1,7 @@
 use futures::StreamExt;
 use sf_info_lib::db::{STORED_SPLIT_CHAR, get_db, reencode_response};
-use zstd::{decode_all, encode_all};
 use tokio::task;
+use zstd::{decode_all, encode_all};
 
 #[tokio::main]
 pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -9,14 +9,16 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     sqlx::query!(
         "CREATE INDEX IF NOT EXISTS player_info_otherplayer_resp_id_idx
-        ON player_info (otherplayer_resp_id)")
-        .execute(&db)
-        .await?;
+        ON player_info (otherplayer_resp_id)"
+    )
+    .execute(&db)
+    .await?;
 
-    let resp_ids: Vec<i32> =
-        sqlx::query_scalar!("SELECT otherplayer_resp_id FROM otherplayer_resp WHERE version < 3")
-            .fetch_all(&db)
-            .await?;
+    let resp_ids: Vec<i32> = sqlx::query_scalar!(
+        "SELECT otherplayer_resp_id FROM otherplayer_resp WHERE version < 3"
+    )
+    .fetch_all(&db)
+    .await?;
 
     let bar = indicatif::ProgressBar::new(resp_ids.len() as u64);
 
@@ -40,8 +42,10 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         return Ok(());
                     };
 
-                    let decoded = task::spawn_blocking(move || decode_all(response.as_slice()))
-                        .await??;
+                    let decoded = task::spawn_blocking(move || {
+                        decode_all(response.as_slice())
+                    })
+                    .await??;
                     let decoded = String::from_utf8(decoded)?;
                     let (otherplayer, equipment) =
                         match decoded.split_once(STORED_SPLIT_CHAR) {
@@ -56,13 +60,15 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let data = data?;
 
                     let new_raw_resp = reencode_response(&data, equipment)?;
-                    let resp = task::spawn_blocking(move || encode_all(new_raw_resp.as_bytes(), 3))
-                        .await??;
+                    let resp = task::spawn_blocking(move || {
+                        encode_all(new_raw_resp.as_bytes(), 3)
+                    })
+                    .await??;
 
                     let mut tx = db.begin().await?;
                     let response_id = sqlx::query_scalar!(
                         "SELECT otherplayer_resp_id FROM otherplayer_resp \
-                            WHERE otherplayer_resp = $1",
+                         WHERE otherplayer_resp = $1",
                         &resp
                     )
                     .fetch_optional(&mut *tx)
