@@ -746,15 +746,14 @@ pub async fn insert_player(
     };
 
     sqlx::query_scalar!(
-        "INSERT INTO player_info (player_id, fetch_time, xp, level, \
+        "INSERT INTO player_info (player_id, fetch_time, level, \
          soldier_advice, description_id, guild_id, otherplayer_resp_id, \
          honor, rank)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
         pid,
         fetch_time,
-        experience,
-        i32::from(other.level),
-        player.soldier_advice,
+        other.level as i16,
+        player.soldier_advice.map(|a| a as i16),
         description_id,
         guild_id,
         response_id,
