@@ -1,6 +1,6 @@
 use std::io::{Read, Write};
 
-use flate2::{bufread::ZlibEncoder, Compression};
+use flate2::{Compression, bufread::ZlibEncoder};
 use sf_info_lib::db::get_db;
 use sqlx::{Pool, Postgres};
 
@@ -23,8 +23,7 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for server_id in server_ids {
         let mut data: Vec<u8> = b"ZHOF3_01".into();
         let players = sqlx::query!(
-            "SELECT
-                level, array_agg(player_id) as player_ids
+            "SELECT level, array_agg(player_id) as player_ids
             FROM player
             WHERE server_id = $1 AND is_removed = FALSE AND level is not null
             GROUP BY level
@@ -48,7 +47,7 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let Some(ids) = rec.player_ids else {
                 continue;
             };
-            data.write_all((-1i8).to_le_bytes().as_ref())?;
+            data.write_all((-1i32).to_le_bytes().as_ref())?;
             data.write_all((level as u16).to_le_bytes().as_ref())?;
 
             for pid in ids {
@@ -57,8 +56,7 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        let mut encoder =
-            ZlibEncoder::new(data.as_ref(), Compression::best());
+        let mut encoder = ZlibEncoder::new(data.as_ref(), Compression::best());
         let mut res = Vec::new();
         encoder.read_to_end(&mut res).unwrap();
 
@@ -73,31 +71,24 @@ pub async fn serialize_player(
     writer: &mut impl std::io::Write,
     db: &Pool<Postgres>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let pid = sqlx::query_scalar!(
-        "SELECT server_player_id
+    let player = sqlx::query!(
+        "SELECT server_player_id, equipment
         FROM player WHERE player_id = $1",
         player_id
     )
     .fetch_one(db)
     .await?;
 
-    let Some(pid) = pid else {
+    let Some(pid) = player.server_player_id else {
+        return Ok(());
+    };
+    let Some(equipment) = player.equipment else {
         return Ok(());
     };
 
-    let idents = sqlx::query_scalar!(
-        "SELECT ident FROM equipment WHERE player_id = $1",
-        player_id
-    )
-    .fetch_all(db)
-    .await?;
-
-    if idents.is_empty() {
-        return Ok(());
-    }
-
     writer.write_all(pid.to_le_bytes().as_ref())?;
-    for ident in idents {
+    writer.write_all((equipment.len() as u8).to_le_bytes().as_ref())?;
+    for ident in equipment {
         writer.write_all(ident.to_le_bytes().as_ref())?;
     }
 
