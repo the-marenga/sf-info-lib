@@ -17,19 +17,19 @@ thiserror = "2.0"
 sf-api = { git = "https://github.com/the-marenga/sf-api.git", branch = "other-player-pub", default-features = false, optional = true }
 log = { version = "0.4", optional = true }
 url = { version = "2.5", optional = true }
-tokio = { version = "1.47", optional = true }
+tokio = { version = "1.48", optional = true }
 fastrand = { version = "2.3", optional = true }
 zstd = { version = "0.13.3", optional = true }
 nohash-hasher = {version = "0.2.0", optional = true}
 
 [dev-dependencies]
-tokio = { version = "1.47", features = ["full"] }
+tokio = { version = "1.48", features = ["full"] }
 futures = "*"
-indicatif = "0.18.0"
+indicatif = "0.18.3"
 sf-api = { git = "https://github.com/the-marenga/sf-api.git", branch = "other-player-pub" }
 serde_json = "*"
-flate2 = { version = "1.1.2", default-features = false, features = ["zlib"] }
-clap = { version = "4.5.46", features = ["derive"] }
+flate2 = { version = "1.1.5", default-features = false, features = ["zlib"] }
+clap = { version = "4.5.53", features = ["derive"] }
 
 [features]
 default = ["db"]
