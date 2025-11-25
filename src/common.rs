@@ -68,7 +68,7 @@ pub fn decompress_ident(ident: i32) -> EquipmentIdent {
 
 pub fn ident_to_info(ident: &str) -> (String, ServerCategory) {
     if ident == "maerwin" {
-        return (format!("{ident}@sfgame.net"), ServerCategory::Fused)
+        return (format!("{ident}@sfgame.net"), ServerCategory::Fused);
     }
     if let Some((_, num)) = ident.split_once("eu") {
         (format!("https://s{num}.sfgame.eu/"), ServerCategory::Europe)

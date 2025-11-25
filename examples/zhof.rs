@@ -100,7 +100,8 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let players = sqlx::query!(
             "SELECT name, level, server_player_id, equipment
             FROM player
-            WHERE player.server_id = $1 AND is_removed = FALSE AND level is not null
+            WHERE player.server_id = $1 AND is_removed = FALSE AND level is \
+             not null
             ",
             server.server_id
         )

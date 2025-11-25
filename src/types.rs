@@ -43,7 +43,9 @@ pub struct ScrapBookAdviceArgs {
     pub max_attrs: u64,
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord, Clone)]
+#[derive(
+    Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord, Clone,
+)]
 #[cfg_attr(feature = "db", derive(sqlx::prelude::FromRow))]
 pub struct ScrapBookAdvice {
     pub player_name: String,
@@ -74,7 +76,6 @@ pub struct GetHofPlayersArgs {
     pub offset: u32,
     pub limit: u32,
 }
-
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Clone, Copy)]
 pub enum ServerCategory {
