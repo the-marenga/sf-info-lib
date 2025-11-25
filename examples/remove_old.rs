@@ -25,7 +25,6 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
             .fetch_all(&db)
             .await
-            .unwrap()
         }
     });
 
@@ -33,6 +32,5 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .buffer_unordered(50)
         .collect::<Vec<_>>()
         .await;
-
     Ok(())
 }

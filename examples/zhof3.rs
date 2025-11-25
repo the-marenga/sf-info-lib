@@ -4,12 +4,12 @@ use flate2::{Compression, bufread::ZlibEncoder};
 use sf_info_lib::db::get_db;
 use sqlx::{Pool, Postgres};
 
-/// ZHOF3_01
-///     -1
-///     LEVEL
-///         pid
-///         ident_count
-///             ident
+// ZHOF3_01
+//     -1
+//     LEVEL
+//         pid
+//         ident_count
+//             ident
 
 #[tokio::main]
 pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -58,7 +58,7 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let mut encoder = ZlibEncoder::new(data.as_ref(), Compression::best());
         let mut res = Vec::new();
-        encoder.read_to_end(&mut res).unwrap();
+        encoder.read_to_end(&mut res)?;
 
         tokio::fs::write(format!("{server_id}.zhof2"), &res).await?;
     }

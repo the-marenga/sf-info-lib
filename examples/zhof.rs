@@ -140,26 +140,24 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // TODO: Do this without keeping it all in memory
-        let serialized = serde_json::to_string(&zhof).unwrap();
+        let serialized = serde_json::to_string(&zhof)?;
         let mut encoder =
             ZlibEncoder::new(serialized.as_bytes(), Compression::best());
         let mut res = Vec::new();
-        encoder.read_to_end(&mut res).unwrap();
+        encoder.read_to_end(&mut res)?;
 
         let server_ident = server
             .url
             .trim_start_matches("https:")
-            .replace("/", "")
-            .replace(".", "");
-        let path = format!("{}.zhof", server_ident);
+            .replace(['/', '.'], "");
+        let path = format!("{server_ident}.zhof");
 
-        std::fs::write(&path, &res).unwrap();
+        std::fs::write(&path, &res)?;
 
         std::fs::write(
             format!("{server_ident}.version"),
             Utc::now().to_rfc2822(),
-        )
-        .unwrap();
+        )?;
         bar.finish_and_clear();
     }
 

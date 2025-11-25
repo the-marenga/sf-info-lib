@@ -117,10 +117,7 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .await;
 
                 if let Err(e) = result {
-                    bar.println(format!(
-                        "Error processing {}: {:?}",
-                        old_id, e
-                    ));
+                    bar.println(format!("Error processing {old_id}: {e:?}"));
                 }
             }
         })
