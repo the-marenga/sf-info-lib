@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT server_id\n            FROM server\n            -- WHERE last_hof_crawl >= NOW() - interval '7 days'",
+  "query": "SELECT server_id\n            FROM server\n            WHERE last_hof_crawl >= NOW() - interval '7 days'",
   "describe": {
     "columns": [
       {
@@ -16,5 +16,5 @@
       false
     ]
   },
-  "hash": "644411939f0919c4a23837d7951c3fdebc74094e5ba52afb79906aec6be848bd"
+  "hash": "5d28baf3bc5e162786326f7672dca119c51d45fba305bfcf29697976ff690e77"
 }
