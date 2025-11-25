@@ -176,7 +176,7 @@ pub async fn get_scrapbook_advice(
         &server_data.equipment,
         &db,
     )
-    .await
+    .await?
     .into();
     log::info!("Calculated: {:?}", now.elapsed());
 
@@ -201,10 +201,10 @@ async fn calc_best_targets(
     player_info: &IntMap<u32, CharacterInfo>,
     equipment: &IntMap<i32, Box<[u32]>>,
     db: &Pool<Postgres>,
-) -> Vec<ScrapBookAdvice> {
+) -> Result<Vec<ScrapBookAdvice>, SFSError> {
     let result_limit = 10;
     let Some(scrapbook) = ScrapBook::parse(&args.raw_scrapbook) else {
-        return vec![];
+        return Ok(vec![]);
     };
 
     let scrapbook: HashSet<i32> =
@@ -218,11 +218,11 @@ async fn calc_best_targets(
     );
 
     let mut best =
-        find_best(&per_player_counts, player_info, result_limit, db).await;
+        find_best(&per_player_counts, player_info, result_limit, db).await?;
     best.sort_by(|a, b| {
         b.new_count.cmp(&a.new_count).then(a.stats.cmp(&b.stats))
     });
-    best
+    Ok(best)
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -270,16 +270,22 @@ async fn find_best(
     player_info: &IntMap<u32, CharacterInfo>,
     max_out: usize,
     db: &Pool<Postgres>,
-) -> Vec<ScrapBookAdvice> {
+) -> Result<Vec<ScrapBookAdvice>, SFSError> {
     // Prune the counts to make computation faster
+    const MAX_EQUIP_COUNT: usize = 10;
     let mut max = 1;
-    let mut counts = [(); 10].map(|_| vec![]);
+    let mut counts = [(); MAX_EQUIP_COUNT].map(|()| vec![]);
     for (player, count) in per_player_counts.iter().map(|a| (*a.0, *a.1)) {
         if max_out == 1 && count < max || count == 0 {
             continue;
         }
         max = max.max(count);
-        counts[(count - 1).clamp(0, 9)].push(player);
+        let idx = (count - 1).clamp(0, 9);
+        let Some(slot) = counts.get_mut(idx) else {
+            // Should never happen
+            continue;
+        };
+        slot.push(player);
     }
 
     let mut best_players = Vec::new();
@@ -304,13 +310,12 @@ async fn find_best(
         winner_ids.as_slice()
     )
     .fetch_all(db)
-    .await
-    .unwrap();
+    .await?;
 
     let names: HashMap<_, _> =
         names.into_iter().map(|a| (a.player_id, a.name)).collect();
 
-    best_players
+    Ok(best_players
         .into_iter()
         .map(|a| ScrapBookAdvice {
             player_name: names
@@ -320,5 +325,5 @@ async fn find_best(
             new_count: a.0,
             stats: a.1.stats,
         })
-        .collect()
+        .collect())
 }
