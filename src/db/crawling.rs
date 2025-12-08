@@ -53,19 +53,16 @@ pub async fn mark_removed(
     .await?;
 
     if let Some(pid) = pid {
-        let res = UPDATE_SENDER.send(PlayerUpdate{
-            player_id: pid as u32,
+        let res = UPDATE_SENDER.send(PlayerUpdate {
+            player_id: pid,
             server_id,
             items: Box::new([]),
-            info: CharacterInfo{
-                stats: 0,
-            },
+            info: CharacterInfo { stats: 0 },
         });
         if res.is_err() {
             log::error!("Could not remove player data");
         }
     }
-
 
     Ok(())
 }
@@ -307,11 +304,11 @@ pub async fn insert_player(
         .await?
     };
 
-    let res = UPDATE_SENDER.send(PlayerUpdate{
-        player_id: pid as u32,
+    let res = UPDATE_SENDER.send(PlayerUpdate {
+        player_id: pid,
         server_id,
         items: equip_idents.into_boxed_slice(),
-        info: CharacterInfo{
+        info: CharacterInfo {
             stats: attributes as u64,
         },
     });

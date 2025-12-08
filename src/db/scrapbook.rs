@@ -15,6 +15,7 @@ use tokio::{
 
 use crate::{common::*, db::*, error::SFSError, types::*};
 
+/// Reads all data, that is required to do scrapbook searches from the database
 async fn read_full_player_db(
     db: &Pool<Postgres>,
     server_id: i32,
@@ -36,7 +37,7 @@ async fn read_full_player_db(
     );
 
     let mut vals = ServerScrapbookInfo::default();
-    let mut equip: HashMap<i32, HashSet<u32>> = HashMap::new();
+    let mut equip: HashMap<i32, HashSet<i32>> = HashMap::new();
 
     for player_record in player_records {
         let idents = player_record.equipment.unwrap_or_default();
@@ -47,16 +48,16 @@ async fn read_full_player_db(
             equip
                 .entry(equip_ident)
                 .or_default()
-                .insert(player_record.player_id as u32);
+                .insert(player_record.player_id);
         }
         let info = CharacterInfo {
             stats: player_record.attributes.unwrap_or(i64::MAX) as u64,
         };
-        vals.player_info.insert(player_record.player_id as u32, info);
+        vals.player_info.insert(player_record.player_id, info);
     }
 
     // Box<[T]> has less overhead and we are not expected to resize this ever
-    // again, so we just convert them
+    // again, so we just convert the vecs
     vals.equipment = equip
         .into_iter()
         .map(|(e_ident, players)| (e_ident, players.into_iter().collect()))
@@ -67,9 +68,9 @@ async fn read_full_player_db(
 #[derive(Debug, Default)]
 struct ServerScrapbookInfo {
     // playerid => Character info
-    player_info: IntMap<u32, CharacterInfo>,
+    player_info: IntMap<i32, CharacterInfo>,
     // Equipment id => player ids
-    equipment: IntMap<i32, Box<[u32]>>,
+    equipment: IntMap<i32, Box<[i32]>>,
 }
 
 pub(crate) static UPDATE_SENDER: LazyLock<UnboundedSender<PlayerUpdate>> =
@@ -84,7 +85,7 @@ static SERVER_PLAYER_CACHE: CacheMap<i32, Arc<ServerScrapbookInfo>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 
 pub(crate) struct PlayerUpdate {
-    pub(crate) player_id: u32,
+    pub(crate) player_id: i32,
     pub(crate) server_id: i32,
     pub(crate) items: Box<[i32]>,
     pub(crate) info: CharacterInfo,
@@ -156,7 +157,7 @@ async fn continuously_update_server_caches(
 
 async fn apply_server_cache_updates(
     server_id: i32,
-    player_updates: IntMap<u32, (Box<[i32]>, CharacterInfo)>,
+    player_updates: IntMap<i32, (Box<[i32]>, CharacterInfo)>,
 ) {
     // Only update one server at a time in order to not exhaust memory
     static SEM: Mutex<()> = Mutex::const_new(());
@@ -168,7 +169,7 @@ async fn apply_server_cache_updates(
     };
 
     let mut player_info = cache_entry.player_info.clone();
-    let mut equipment: HashMap<i32, HashSet<u32>> = cache_entry
+    let mut equipment: HashMap<i32, HashSet<i32>> = cache_entry
         .equipment
         .iter()
         .map(|a| (*a.0, a.1.iter().copied().collect()))
@@ -272,8 +273,8 @@ pub async fn get_scrapbook_advice(
 
 async fn calc_best_targets(
     args: &ScrapBookAdviceArgs,
-    player_info: &IntMap<u32, CharacterInfo>,
-    equipment: &IntMap<i32, Box<[u32]>>,
+    player_info: &IntMap<i32, CharacterInfo>,
+    equipment: &IntMap<i32, Box<[i32]>>,
     db: &Pool<Postgres>,
 ) -> Result<Vec<ScrapBookAdvice>, SFSError> {
     let result_limit = 10;
@@ -306,13 +307,13 @@ pub struct CharacterInfo {
 
 pub fn calc_per_player_count(
     // player => Detailed info
-    player_info: &IntMap<u32, CharacterInfo>,
+    player_info: &IntMap<i32, CharacterInfo>,
     // equipment => players
-    equipment: &IntMap<i32, Box<[u32]>>,
+    equipment: &IntMap<i32, Box<[i32]>>,
     // the items the player already has
     scrapbook: &HashSet<i32>,
     max_attrs: u64,
-) -> HashMap<u32, usize> {
+) -> HashMap<i32, usize> {
     let mut per_player_counts = HashMap::default();
     per_player_counts.reserve(player_info.len());
 
@@ -339,8 +340,8 @@ pub fn calc_per_player_count(
 }
 
 async fn find_best(
-    per_player_counts: &HashMap<u32, usize>,
-    player_info: &IntMap<u32, CharacterInfo>,
+    per_player_counts: &HashMap<i32, usize>,
+    player_info: &IntMap<i32, CharacterInfo>,
     max_out: usize,
     db: &Pool<Postgres>,
 ) -> Result<Vec<ScrapBookAdvice>, SFSError> {

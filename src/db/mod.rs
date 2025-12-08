@@ -16,7 +16,7 @@ pub use mfbot::*;
 pub use scrapbook::*;
 use sqlx::{Pool, Postgres};
 pub use stats::*;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{Mutex, OnceCell, RwLock};
 
 use crate::error::SFSError;
 
@@ -30,8 +30,7 @@ struct CacheEntry<T> {
 
 /// Gets the connection pool, that is going to be shared accross invocations
 pub async fn get_db() -> Result<Pool<Postgres>, SFSError> {
-    static DB: async_once_cell::OnceCell<Pool<Postgres>> =
-        async_once_cell::OnceCell::new();
+    static DB: OnceCell<Pool<Postgres>> = OnceCell::const_new();
 
     let get_options = || {
         sqlx::postgres::PgPoolOptions::new()
@@ -42,7 +41,7 @@ pub async fn get_db() -> Result<Pool<Postgres>, SFSError> {
     };
 
     Ok(DB
-        .get_or_try_init(get_options().connect(env!("DATABASE_URL")))
+        .get_or_try_init(|| get_options().connect(env!("DATABASE_URL") ))
         .await?
         .to_owned())
 }
