@@ -1,23 +1,26 @@
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, LazyLock, atomic::AtomicBool},
-    time::{Duration, Instant},
+    sync::{Arc, LazyLock},
+    time::Instant,
 };
 
 use chrono::Utc;
 use nohash_hasher::IntMap;
 use sf_api::gamestate::unlockables::ScrapBook;
 use sqlx::{Pool, Postgres};
-use tokio::{sync::RwLock, task::JoinHandle, time::sleep};
+use tokio::{
+    sync::{RwLock, mpsc::*},
+    task::JoinHandle,
+};
 
 use crate::{common::*, db::*, error::SFSError, types::*};
 
 async fn read_full_player_db(
     db: &Pool<Postgres>,
     server_id: i32,
-) -> Result<PCacheValue, SFSError> {
+) -> Result<ServerScrapbookInfo, SFSError> {
     let now = Instant::now();
-    let res = sqlx::query!(
+    let player_records = sqlx::query!(
         "SELECT player_id, attributes, equipment
         FROM player
         WHERE server_id = $1 AND is_removed = FALSE",
@@ -28,16 +31,15 @@ async fn read_full_player_db(
 
     log::info!(
         "Read {server_id}'s {} players in {:?}",
-        res.len(),
+        player_records.len(),
         now.elapsed()
     );
 
-    let mut vals = PCacheValue::default();
-
+    let mut vals = ServerScrapbookInfo::default();
     let mut equip: HashMap<i32, HashSet<u32>> = HashMap::new();
 
-    for r in res {
-        let idents = r.equipment.unwrap_or_default();
+    for player_record in player_records {
+        let idents = player_record.equipment.unwrap_or_default();
         if idents.is_empty() {
             continue;
         }
@@ -45,79 +47,164 @@ async fn read_full_player_db(
             equip
                 .entry(equip_ident)
                 .or_default()
-                .insert(r.player_id as u32);
+                .insert(player_record.player_id as u32);
         }
         let info = CharacterInfo {
-            stats: r.attributes.unwrap_or(i64::MAX) as u64,
-            player_id: r.player_id,
+            stats: player_record.attributes.unwrap_or(i64::MAX) as u64,
         };
-        vals.player_info.insert(r.player_id as u32, info);
+        vals.player_info.insert(player_record.player_id as u32, info);
     }
-    let mut saved = 0;
-    let mut total = 1;
+
+    // Box<[T]> has less overhead and we are not expected to resize this ever
+    // again, so we just convert them
     vals.equipment = equip
         .into_iter()
-        .map(|(e_ident, players)| {
-            saved += players.capacity() - players.len();
-            total += players.capacity();
-            (e_ident, players.into_iter().collect())
-        })
+        .map(|(e_ident, players)| (e_ident, players.into_iter().collect()))
         .collect();
-    log::info!("Saved {}%", (saved as f32 / total as f32) * 100.0);
     Ok(vals)
 }
 
 #[derive(Debug, Default)]
-struct PCacheValue {
+struct ServerScrapbookInfo {
+    // playerid => Character info
     player_info: IntMap<u32, CharacterInfo>,
     // Equipment id => player ids
     equipment: IntMap<i32, Box<[u32]>>,
 }
 
-// Maps the server_id to a list of all servers on the server
-static SERVER_PLAYER_CACHE: CacheMap<i32, Arc<PCacheValue>> =
+pub(crate) static UPDATE_SENDER: LazyLock<UnboundedSender<PlayerUpdate>> =
+    LazyLock::new(|| {
+        let (send, recv) = unbounded_channel();
+        tokio::spawn(async move { fill_all_server_caches(recv).await });
+        send
+    });
+
+// Maps the server_id to a info about items on that server
+static SERVER_PLAYER_CACHE: CacheMap<i32, Arc<ServerScrapbookInfo>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 
-async fn fill_all_server_caches(db: Pool<Postgres>) -> Result<(), SFSError> {
-    let mut first_iter = true;
-    loop {
-        if !first_iter {
-            sleep(Duration::from_secs(60 * 60)).await;
-        }
+pub(crate) struct PlayerUpdate {
+    pub(crate) player_id: u32,
+    pub(crate) server_id: i32,
+    pub(crate) items: Box<[i32]>,
+    pub(crate) info: CharacterInfo,
+}
 
-        let servers = sqlx::query_scalar!(
-            "SELECT server_id
-            FROM server
-            WHERE last_hof_crawl >= NOW() - interval '7 days'"
-        )
-        .fetch_all(&db)
-        .await?;
+pub(crate) async fn fill_all_server_caches(
+    recv: UnboundedReceiver<PlayerUpdate>,
+) -> Result<(), SFSError> {
+    let db = get_db().await?;
 
-        let mut tasks = vec![];
-        for id in servers {
+    let servers = sqlx::query_scalar!(
+        "SELECT server_id
+        FROM server
+        WHERE last_hof_crawl >= NOW() - interval '7 days'"
+    )
+    .fetch_all(&db)
+    .await?;
+
+    let mut tasks = vec![];
+    for id in servers {
+        let db = db.clone();
+        let task: JoinHandle<Result<(), SFSError>> = tokio::spawn(async move {
             let db = db.clone();
-            let task: JoinHandle<Result<(), SFSError>> =
-                tokio::spawn(async move {
-                    let db = db.clone();
-                    let res = Arc::new(read_full_player_db(&db, id).await?);
-                    let mut spc = SERVER_PLAYER_CACHE.write().await;
-                    spc.insert(id, res.clone());
-                    drop(spc);
-                    Ok(())
-                });
-            if first_iter {
-                tasks.push(task);
-            } else {
-                _ = task.await;
-            }
+            let res = Arc::new(read_full_player_db(&db, id).await?);
+            let mut spc = SERVER_PLAYER_CACHE.write().await;
+            spc.insert(id, res.clone());
+            drop(spc);
+            Ok(())
+        });
+        tasks.push(task);
+    }
+    for task in tasks {
+        if let Err(e) = task.await {
+            log::error!("Could not fetch server data: {e}");
         }
-        first_iter = false;
-        for task in tasks {
-            if let Err(e) = task.await {
-                log::error!("Could not fetch server data: {e}");
+    }
+    continuously_update_server_caches(recv).await
+}
+
+async fn continuously_update_server_caches(
+    mut recv: UnboundedReceiver<PlayerUpdate>,
+) -> Result<(), SFSError> {
+    let mut server_updates = HashMap::new();
+    while let Some(update) = recv.recv().await {
+        let server_data = server_updates
+            .entry(update.server_id)
+            .or_insert_with(|| CacheEntry {
+                result: IntMap::default(),
+                insertion_time: Utc::now(),
+            });
+        server_data
+            .result
+            .insert(update.player_id, (update.items, update.info));
+
+        if server_data.insertion_time + minutes(30) < Utc::now()
+            || server_data.result.len() >= 3000
+        {
+            let mut updates = IntMap::default();
+            server_data.insertion_time =
+                Utc::now() + minutes(fastrand::u64(1..5));
+
+            std::mem::swap(&mut server_data.result, &mut updates);
+            tokio::spawn(apply_server_cache_updates(update.server_id, updates));
+        }
+    }
+
+    Ok(())
+}
+
+async fn apply_server_cache_updates(
+    server_id: i32,
+    player_updates: IntMap<u32, (Box<[i32]>, CharacterInfo)>,
+) {
+    // Only update one server at a time in order to not exhaust memory
+    static SEM: Mutex<()> = Mutex::const_new(());
+    let permit = SEM.lock().await;
+
+    let cache_entry = {
+        let mut entry = SERVER_PLAYER_CACHE.write().await;
+        entry.entry(server_id).or_default().clone()
+    };
+
+    let mut player_info = cache_entry.player_info.clone();
+    let mut equipment: HashMap<i32, HashSet<u32>> = cache_entry
+        .equipment
+        .iter()
+        .map(|a| (*a.0, a.1.iter().copied().collect()))
+        .collect();
+    drop(cache_entry);
+
+    for (pid, (player_equip, info)) in player_updates {
+        player_info.insert(pid, info);
+
+        for (ident, equipment) in &mut equipment {
+            // player_equip is <= 10 elements, so constructing and querying a
+            // hashset would likely be slower here
+            if player_equip.contains(ident) {
+                equipment.insert(pid);
+            } else {
+                // Remove any old equipment. This will mostly remove nothing,
+                // but we have to do this. The alternative would be to track
+                // the old equipment (which is what the helper does), but that
+                // roughly doubles the memory usage, so no...
+                equipment.remove(&pid);
             }
         }
     }
+
+    let new_data = ServerScrapbookInfo {
+        player_info,
+        equipment: equipment
+            .into_iter()
+            .map(|(a, b)| (a, b.into_iter().collect()))
+            .collect(),
+    };
+
+    let mut entry = SERVER_PLAYER_CACHE.write().await;
+    entry.insert(server_id, Arc::new(new_data));
+    drop(entry);
+    drop(permit);
 }
 
 /// Returns players, that have a lot of items, that are not yet in the
@@ -132,7 +219,6 @@ pub async fn get_scrapbook_advice(
         ScrapBookAdviceArgs,
         CacheEntry<Arc<[ScrapBookAdvice]>>,
     > = LazyLock::new(|| RwLock::new(HashMap::new()));
-    static HAS_STARTED_UPDATES: AtomicBool = AtomicBool::new(false);
 
     {
         let k = RESULT_CACHE.read().await;
@@ -144,21 +230,9 @@ pub async fn get_scrapbook_advice(
         }
     }
 
+    let _init_the_lazy_lock = UPDATE_SENDER.weak_count();
+
     let db = get_db().await?;
-
-    if HAS_STARTED_UPDATES
-        .compare_exchange(
-            false,
-            true,
-            std::sync::atomic::Ordering::SeqCst,
-            std::sync::atomic::Ordering::SeqCst,
-        )
-        .is_ok()
-    {
-        let db = db.clone();
-        tokio::spawn(async move { fill_all_server_caches(db).await });
-    }
-
     let id = get_server_id(&db, args.server.clone()).await?;
 
     let server_data = {
@@ -227,8 +301,7 @@ async fn calc_best_targets(
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct CharacterInfo {
-    stats: u64,
-    player_id: i32,
+    pub(crate) stats: u64,
 }
 
 pub fn calc_per_player_count(
@@ -303,8 +376,7 @@ async fn find_best(
     best_players.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.stats.cmp(&b.1.stats)));
     best_players.truncate(max_out);
 
-    let winner_ids: Vec<_> =
-        best_players.iter().map(|a| a.1.player_id).collect();
+    let winner_ids: Vec<_> = best_players.iter().map(|a| a.0 as i32).collect();
     let names = sqlx::query!(
         "SELECT player_id, name FROM player WHERE player_id = ANY($1)",
         winner_ids.as_slice()
@@ -319,7 +391,7 @@ async fn find_best(
         .into_iter()
         .map(|a| ScrapBookAdvice {
             player_name: names
-                .get(&a.1.player_id)
+                .get(&(a.0 as i32))
                 .cloned()
                 .unwrap_or_else(|| a.0.to_string()),
             new_count: a.0,
