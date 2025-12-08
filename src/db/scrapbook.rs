@@ -91,6 +91,9 @@ pub(crate) struct PlayerUpdate {
     pub(crate) info: CharacterInfo,
 }
 
+/// Initially fills the scrapbook cache with player data from the database.
+/// Once that is done, it will start reading and applying updates from the
+/// given receiver
 pub(crate) async fn fill_all_server_caches(
     recv: UnboundedReceiver<PlayerUpdate>,
 ) -> Result<(), SFSError> {
@@ -125,6 +128,10 @@ pub(crate) async fn fill_all_server_caches(
     continuously_update_server_caches(recv).await
 }
 
+/// Reads player data updates from the given receiver and stores them grouped
+/// by the server. Once a sufficiently large amount of player updates have been
+/// found, or enough time has passed, server batches will be written to the
+/// actual cache.
 async fn continuously_update_server_caches(
     mut recv: UnboundedReceiver<PlayerUpdate>,
 ) -> Result<(), SFSError> {
@@ -154,7 +161,10 @@ async fn continuously_update_server_caches(
 
     Ok(())
 }
-
+/// Updates the server cache with the given updates. Each update requires
+/// cloning the player data, converting it to more update friendly datatypes,
+/// updating the existing data and interacting with the cache (read & lock),
+/// which is why we have to do this work in per server batches, not immediately
 async fn apply_server_cache_updates(
     server_id: i32,
     player_updates: IntMap<i32, (Box<[i32]>, CharacterInfo)>,
@@ -164,8 +174,8 @@ async fn apply_server_cache_updates(
     let permit = SEM.lock().await;
 
     let cache_entry = {
-        let mut entry = SERVER_PLAYER_CACHE.write().await;
-        entry.entry(server_id).or_default().clone()
+        let entry = SERVER_PLAYER_CACHE.read().await;
+        entry.get(&server_id).cloned().unwrap_or_default()
     };
 
     let mut player_info = cache_entry.player_info.clone();
@@ -209,10 +219,7 @@ async fn apply_server_cache_updates(
 }
 
 /// Returns players, that have a lot of items, that are not yet in the
-/// scrapbook. Evaluating ALL players can be prohibitively slow (> 20 secs),
-/// so we look at progressively larger chunks of the playerbase until we find
-/// a player with "enough" new items. This reduce the time to 15ms-2s in most
-/// cases, especially for new chars
+/// scrapbook
 pub async fn get_scrapbook_advice(
     args: ScrapBookAdviceArgs,
 ) -> Result<Arc<[ScrapBookAdvice]>, SFSError> {

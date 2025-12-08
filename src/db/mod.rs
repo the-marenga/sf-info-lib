@@ -41,7 +41,7 @@ pub async fn get_db() -> Result<Pool<Postgres>, SFSError> {
     };
 
     Ok(DB
-        .get_or_try_init(|| get_options().connect(env!("DATABASE_URL") ))
+        .get_or_try_init(|| get_options().connect(env!("DATABASE_URL")))
         .await?
         .to_owned())
 }
