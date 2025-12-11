@@ -355,36 +355,48 @@ async fn find_best(
     // Prune the counts to make computation faster
     const MAX_EQUIP_COUNT: usize = 10;
     let mut max = 1;
+
+    // Map amount of new items => player ids
     let mut counts = [(); MAX_EQUIP_COUNT].map(|()| vec![]);
-    for (player, count) in per_player_counts.iter().map(|a| (*a.0, *a.1)) {
+    for (player_id, count) in per_player_counts.iter().map(|a| (*a.0, *a.1)) {
         if max_out == 1 && count < max || count == 0 {
             continue;
         }
         max = max.max(count);
-        let idx = (count - 1).clamp(0, 9);
-        let Some(slot) = counts.get_mut(idx) else {
+        let new_itm_counts = (count - 1).clamp(0, 9);
+        let Some(slot) = counts.get_mut(new_itm_counts) else {
             // Should never happen
             continue;
         };
-        slot.push(player);
+        slot.push(player_id);
+    }
+
+    struct RawScrapBookAdvice {
+        player_id: i32,
+        count: u32,
+        stats: u64,
     }
 
     let mut best_players = Vec::new();
-    for (count, players) in counts.iter().enumerate().rev() {
-        best_players.extend(
-            players
-                .iter()
-                .filter_map(|a| player_info.get(a))
-                .map(|a| ((count + 1) as u32, a)),
-        );
+    for (count, players) in counts.into_iter().enumerate().rev() {
+        for player_id in players {
+            if let Some(info) = player_info.get(&player_id) {
+                best_players.push(RawScrapBookAdvice {
+                    player_id,
+                    count: (count + 1) as u32,
+                    stats: info.stats,
+                });
+            }
+        }
         if best_players.len() >= max_out {
             break;
         }
     }
-    best_players.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.stats.cmp(&b.1.stats)));
+    best_players
+        .sort_by(|a, b| b.count.cmp(&a.count).then(a.stats.cmp(&b.stats)));
     best_players.truncate(max_out);
 
-    let winner_ids: Vec<_> = best_players.iter().map(|a| a.0 as i32).collect();
+    let winner_ids: Vec<_> = best_players.iter().map(|a| a.player_id).collect();
     let names = sqlx::query!(
         "SELECT player_id, name FROM player WHERE player_id = ANY($1)",
         winner_ids.as_slice()
@@ -397,13 +409,12 @@ async fn find_best(
 
     Ok(best_players
         .into_iter()
-        .map(|a| ScrapBookAdvice {
-            player_name: names
-                .get(&(a.0 as i32))
-                .cloned()
-                .unwrap_or_else(|| a.0.to_string()),
-            new_count: a.0,
-            stats: a.1.stats,
+        .filter_map(|a| {
+            Some(ScrapBookAdvice {
+                player_name: names.get(&a.player_id).cloned()?,
+                new_count: a.count,
+                stats: a.stats,
+            })
         })
         .collect())
 }
