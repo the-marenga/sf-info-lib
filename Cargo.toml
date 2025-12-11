@@ -4,7 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-async-once-cell = { version = "0.5", optional = true }
 chrono = { version = "0.4", optional = true }
 serde = { version = "1.0", features = ["derive"] }
 sqlx = { version = "0.8", features = [
@@ -34,7 +33,6 @@ clap = { version = "4.5.53", features = ["derive"] }
 [features]
 default = ["db"]
 db = [
-    "dep:async-once-cell",
     "dep:chrono",
     "dep:fastrand",
     "dep:log",

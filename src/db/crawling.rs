@@ -41,15 +41,28 @@ pub async fn mark_removed(
         return Ok(());
     }
 
-    sqlx::query!(
+    let pid = sqlx::query_scalar!(
         "UPDATE player
         SET is_removed = true
-        WHERE server_id = $1 AND name = $2",
+        WHERE server_id = $1 AND name = $2
+        RETURNING player_id",
         server_id,
         &player_name
     )
-    .execute(db)
+    .fetch_optional(db)
     .await?;
+
+    if let Some(pid) = pid {
+        let res = UPDATE_SENDER.send(PlayerUpdate {
+            player_id: pid,
+            server_id,
+            items: Box::new([]),
+            info: CharacterInfo { stats: 0 },
+        });
+        if res.is_err() {
+            log::error!("Could not remove player data");
+        }
+    }
 
     Ok(())
 }
@@ -290,6 +303,18 @@ pub async fn insert_player(
         .fetch_one(&mut *tx)
         .await?
     };
+
+    let res = UPDATE_SENDER.send(PlayerUpdate {
+        player_id: pid,
+        server_id,
+        items: equip_idents.into_boxed_slice(),
+        info: CharacterInfo {
+            stats: attributes as u64,
+        },
+    });
+    if res.is_err() {
+        log::error!("Could not send update");
+    }
 
     let description = player.description.unwrap_or_default();
 
