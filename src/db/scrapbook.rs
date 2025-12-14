@@ -173,6 +173,10 @@ async fn apply_server_cache_updates(
     static SEM: Mutex<()> = Mutex::const_new(());
     let permit = SEM.lock().await;
 
+    log::info!("Updating cache for {} players on {server_id}", player_updates.len());
+
+    let start = Instant::now();
+
     let cache_entry = {
         let entry = SERVER_PLAYER_CACHE.read().await;
         entry.get(&server_id).cloned().unwrap_or_default()
@@ -216,6 +220,7 @@ async fn apply_server_cache_updates(
     entry.insert(server_id, Arc::new(new_data));
     drop(entry);
     drop(permit);
+    log::info!("Updating {server_id} took {:?}", start.elapsed());
 }
 
 /// Returns players, that have a lot of items, that are not yet in the
