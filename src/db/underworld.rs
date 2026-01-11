@@ -69,7 +69,7 @@ pub(crate) async fn update_underworld_enemies(
         })
         .collect();
 
-    result.sort_unstable_by_key(|a| i32::from(a.level).neg());
+    result.sort_unstable_by_key(|a| a.stats.neg());
 
     let mut entry = NUDE_PLAYER_CACHE.write().await;
     entry.insert(server_id, result.into());
