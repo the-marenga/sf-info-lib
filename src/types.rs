@@ -37,6 +37,12 @@ pub struct RawOtherPlayer {
 }
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
+pub struct UnderworldAdviceArgs {
+    pub server: String,
+    pub max_attrs: i64,
+}
+
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
 pub struct ScrapBookAdviceArgs {
     pub raw_scrapbook: String,
     pub server: String,
@@ -52,6 +58,16 @@ pub struct ScrapBookAdvice {
     pub new_count: u32,
     #[serde(skip)]
     pub stats: u64,
+}
+
+#[derive(
+    Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord, Clone,
+)]
+#[cfg_attr(feature = "db", derive(sqlx::prelude::FromRow))]
+pub struct UnderworldAdvice {
+    pub player_name: String,
+    pub level: u16,
+    pub stats: i64,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

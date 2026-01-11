@@ -8,179 +8,36 @@ use chrono::Utc;
 use nohash_hasher::IntMap;
 use sf_api::gamestate::unlockables::ScrapBook;
 use sqlx::{Pool, Postgres};
-use tokio::{
-    sync::{RwLock, mpsc::*},
-    task::JoinHandle,
+use tokio::sync::RwLock;
+
+use crate::{
+    common::*,
+    db::{update::UPDATE_SENDER, *},
+    error::SFSError,
+    types::*,
 };
 
-use crate::{common::*, db::*, error::SFSError, types::*};
-
-/// Reads all data, that is required to do scrapbook searches from the database
-async fn read_full_player_db(
-    db: &Pool<Postgres>,
-    server_id: i32,
-) -> Result<ServerScrapbookInfo, SFSError> {
-    let now = Instant::now();
-    let player_records = sqlx::query!(
-        "SELECT player_id, attributes, equipment
-        FROM player
-        WHERE server_id = $1 AND is_removed = FALSE",
-        server_id
-    )
-    .fetch_all(db)
-    .await?;
-
-    log::info!(
-        "Read {server_id}'s {} players in {:?}",
-        player_records.len(),
-        now.elapsed()
-    );
-
-    let mut vals = ServerScrapbookInfo::default();
-    let mut equip: HashMap<i32, HashSet<i32>> = HashMap::new();
-
-    for player_record in player_records {
-        let idents = player_record.equipment.unwrap_or_default();
-        if idents.is_empty() {
-            continue;
-        }
-        for equip_ident in idents {
-            equip
-                .entry(equip_ident)
-                .or_default()
-                .insert(player_record.player_id);
-        }
-        let info = CharacterInfo {
-            stats: player_record.attributes.unwrap_or(i64::MAX) as u64,
-        };
-        vals.player_info.insert(player_record.player_id, info);
-    }
-
-    // Box<[T]> has less overhead and we are not expected to resize this ever
-    // again, so we just convert the vecs
-    vals.equipment = equip
-        .into_iter()
-        .map(|(e_ident, players)| (e_ident, players.into_iter().collect()))
-        .collect();
-    Ok(vals)
-}
-
 #[derive(Debug, Default)]
-struct ServerScrapbookInfo {
-    // playerid => Character info
-    player_info: IntMap<i32, CharacterInfo>,
+pub(crate) struct ServerScrapbookInfo {
+    // playerid => stats
+    pub(crate) player_info: IntMap<i32, u64>,
     // Equipment id => player ids
-    equipment: IntMap<i32, Box<[i32]>>,
+    pub(crate) equipment: IntMap<i32, Box<[i32]>>,
 }
-
-pub(crate) static UPDATE_SENDER: LazyLock<UnboundedSender<PlayerUpdate>> =
-    LazyLock::new(|| {
-        let (send, recv) = unbounded_channel();
-        tokio::spawn(async move { fill_all_server_caches(recv).await });
-        send
-    });
 
 // Maps the server_id to a info about items on that server
-static SERVER_PLAYER_CACHE: CacheMap<i32, Arc<ServerScrapbookInfo>> =
+static SCRAPBOOK_PLAYER_CACHE: CacheMap<i32, Arc<ServerScrapbookInfo>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 
-pub(crate) struct PlayerUpdate {
-    pub(crate) player_id: i32,
-    pub(crate) server_id: i32,
-    pub(crate) items: Box<[i32]>,
-    pub(crate) info: CharacterInfo,
-}
-
-/// Initially fills the scrapbook cache with player data from the database.
-/// Once that is done, it will start reading and applying updates from the
-/// given receiver
-pub(crate) async fn fill_all_server_caches(
-    recv: UnboundedReceiver<PlayerUpdate>,
-) -> Result<(), SFSError> {
-    let db = get_db().await?;
-
-    let servers = sqlx::query_scalar!(
-        "SELECT server_id
-        FROM server
-        WHERE last_hof_crawl >= NOW() - interval '7 days'"
-    )
-    .fetch_all(&db)
-    .await?;
-
-    let mut tasks = vec![];
-    for id in servers {
-        let db = db.clone();
-        let task: JoinHandle<Result<(), SFSError>> = tokio::spawn(async move {
-            let db = db.clone();
-            let res = Arc::new(read_full_player_db(&db, id).await?);
-            let mut spc = SERVER_PLAYER_CACHE.write().await;
-            spc.insert(id, res.clone());
-            drop(spc);
-            Ok(())
-        });
-        tasks.push(task);
-    }
-    for task in tasks {
-        if let Err(e) = task.await {
-            log::error!("Could not fetch server data: {e}");
-        }
-    }
-    continuously_update_server_caches(recv).await
-}
-
-/// Reads player data updates from the given receiver and stores them grouped
-/// by the server. Once a sufficiently large amount of player updates have been
-/// found, or enough time has passed, server batches will be written to the
-/// actual cache.
-async fn continuously_update_server_caches(
-    mut recv: UnboundedReceiver<PlayerUpdate>,
-) -> Result<(), SFSError> {
-    let mut server_updates = HashMap::new();
-    while let Some(update) = recv.recv().await {
-        let server_data = server_updates
-            .entry(update.server_id)
-            .or_insert_with(|| CacheEntry {
-                result: IntMap::default(),
-                insertion_time: Utc::now(),
-            });
-        server_data
-            .result
-            .insert(update.player_id, (update.items, update.info));
-
-        if server_data.insertion_time + minutes(30) < Utc::now()
-            || server_data.result.len() >= 3000
-        {
-            let mut updates = IntMap::default();
-            server_data.insertion_time =
-                Utc::now() + minutes(fastrand::u64(1..5));
-
-            std::mem::swap(&mut server_data.result, &mut updates);
-            tokio::spawn(apply_server_cache_updates(update.server_id, updates));
-        }
-    }
-
-    Ok(())
-}
-/// Updates the server cache with the given updates. Each update requires
-/// cloning the player data, converting it to more update friendly datatypes,
-/// updating the existing data and interacting with the cache (read & lock),
-/// which is why we have to do this work in per server batches, not immediately
-async fn apply_server_cache_updates(
+pub(crate) async fn update_scrapbook_cache(
     server_id: i32,
     player_updates: IntMap<i32, (Box<[i32]>, CharacterInfo)>,
 ) {
-    // Only update one server at a time in order to not exhaust memory
-    static SEM: Mutex<()> = Mutex::const_new(());
-    let permit = SEM.lock().await;
-
-    log::info!("Updating cache for {} players on {server_id}", player_updates.len());
-
-    let start = Instant::now();
-
     let cache_entry = {
-        let entry = SERVER_PLAYER_CACHE.read().await;
+        let entry = SCRAPBOOK_PLAYER_CACHE.read().await;
         entry.get(&server_id).cloned().unwrap_or_default()
     };
+    let is_initial_fetch = cache_entry.equipment.is_empty();
 
     let mut player_info = cache_entry.player_info.clone();
     let mut equipment: HashMap<i32, HashSet<i32>> = cache_entry
@@ -188,10 +45,19 @@ async fn apply_server_cache_updates(
         .iter()
         .map(|a| (*a.0, a.1.iter().copied().collect()))
         .collect();
+
     drop(cache_entry);
 
     for (pid, (player_equip, info)) in player_updates {
-        player_info.insert(pid, info);
+        player_info.insert(pid, info.stats);
+
+        if is_initial_fetch {
+            // No need to clear old entries, we just insert all players
+            for equip_ident in player_equip {
+                equipment.entry(equip_ident).or_default().insert(pid);
+            }
+            continue;
+        }
 
         for (ident, equipment) in &mut equipment {
             // player_equip is <= 10 elements, so constructing and querying a
@@ -216,11 +82,9 @@ async fn apply_server_cache_updates(
             .collect(),
     };
 
-    let mut entry = SERVER_PLAYER_CACHE.write().await;
+    let mut entry = SCRAPBOOK_PLAYER_CACHE.write().await;
     entry.insert(server_id, Arc::new(new_data));
     drop(entry);
-    drop(permit);
-    log::info!("Updating {server_id} took {:?}", start.elapsed());
 }
 
 /// Returns players, that have a lot of items, that are not yet in the
@@ -243,13 +107,13 @@ pub async fn get_scrapbook_advice(
         }
     }
 
-    let _init_the_lazy_lock = UPDATE_SENDER.weak_count();
+    let _init_caches = UPDATE_SENDER.weak_count();
 
     let db = get_db().await?;
     let id = get_server_id(&db, args.server.clone()).await?;
 
     let server_data = {
-        let scp = SERVER_PLAYER_CACHE.read().await;
+        let scp = SCRAPBOOK_PLAYER_CACHE.read().await;
         let Some(entry) = scp.get(&id) else {
             return Ok(Arc::default());
         };
@@ -285,7 +149,7 @@ pub async fn get_scrapbook_advice(
 
 async fn calc_best_targets(
     args: &ScrapBookAdviceArgs,
-    player_info: &IntMap<i32, CharacterInfo>,
+    player_info: &IntMap<i32, u64>,
     equipment: &IntMap<i32, Box<[i32]>>,
     db: &Pool<Postgres>,
 ) -> Result<Vec<ScrapBookAdvice>, SFSError> {
@@ -315,11 +179,13 @@ async fn calc_best_targets(
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct CharacterInfo {
     pub(crate) stats: u64,
+    // *Sad memory alignment noises*
+    pub(crate) level: u16,
 }
 
 pub fn calc_per_player_count(
     // player => Detailed info
-    player_info: &IntMap<i32, CharacterInfo>,
+    player_info: &IntMap<i32, u64>,
     // equipment => players
     equipment: &IntMap<i32, Box<[i32]>>,
     // the items the player already has
@@ -339,11 +205,11 @@ pub fn calc_per_player_count(
     }
 
     per_player_counts.retain(|a, _| {
-        let Some(info) = player_info.get(a) else {
+        let Some(stats) = player_info.get(a) else {
             return false;
         };
 
-        if info.stats > max_attrs {
+        if *stats > max_attrs {
             return false;
         }
         true
@@ -353,7 +219,7 @@ pub fn calc_per_player_count(
 
 async fn find_best(
     per_player_counts: &HashMap<i32, usize>,
-    player_info: &IntMap<i32, CharacterInfo>,
+    player_info: &IntMap<i32, u64>,
     max_out: usize,
     db: &Pool<Postgres>,
 ) -> Result<Vec<ScrapBookAdvice>, SFSError> {
@@ -385,11 +251,11 @@ async fn find_best(
     let mut best_players = Vec::new();
     for (count, players) in counts.into_iter().enumerate().rev() {
         for player_id in players {
-            if let Some(info) = player_info.get(&player_id) {
+            if let Some(stats) = player_info.get(&player_id) {
                 best_players.push(RawScrapBookAdvice {
                     player_id,
                     count: (count + 1) as u32,
-                    stats: info.stats,
+                    stats: *stats,
                 });
             }
         }
