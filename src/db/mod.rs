@@ -4,6 +4,8 @@ pub mod crawling;
 pub mod mfbot;
 pub mod scrapbook;
 pub mod stats;
+pub mod underworld;
+pub mod update;
 
 use std::{
     collections::HashMap,

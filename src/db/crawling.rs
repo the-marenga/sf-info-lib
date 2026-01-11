@@ -3,7 +3,15 @@ use std::fmt::Write;
 use chrono::{DateTime, Utc};
 use sf_api::gamestate::{ServerTime, items::Equipment, social::*};
 
-use crate::{common::*, db::*, error::SFSError, types::*};
+use crate::{
+    common::*,
+    db::{
+        update::{PlayerUpdate, UPDATE_SENDER},
+        *,
+    },
+    error::SFSError,
+    types::*,
+};
 
 pub async fn handle_crawl_report(report: CrawlReport) -> Result<(), SFSError> {
     let db = get_db().await?;
@@ -57,7 +65,7 @@ pub async fn mark_removed(
             player_id: pid,
             server_id,
             items: Box::new([]),
-            info: CharacterInfo { stats: 0 },
+            info: CharacterInfo { stats: 0, level: 0 },
         });
         if res.is_err() {
             log::error!("Could not remove player data");
@@ -310,6 +318,7 @@ pub async fn insert_player(
         items: equip_idents.into_boxed_slice(),
         info: CharacterInfo {
             stats: attributes as u64,
+            level: other.level,
         },
     });
     if res.is_err() {
