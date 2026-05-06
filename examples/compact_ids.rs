@@ -9,7 +9,9 @@
 use std::collections::HashMap;
 
 use indicatif::{ProgressBar, ProgressStyle};
-use sqlx::PgPool;
+use sqlx::{PgPool, Pool, Postgres};
+use futures::stream::FuturesUnordered;
+use futures::StreamExt;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -88,32 +90,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .progress_chars("#>-"),
     );
 
-    for old_id in &old_ids {
+    // Update the ids, that may be overwritten later first.
+    for old_id in old_ids.iter().take_while(|&&a| a <= max_new_id) {
         if let Some(&new_id) = id_map.get(old_id) {
-            let mut tx = db.begin().await?;
-
-            sqlx::query!(
-                "UPDATE player_info SET player_id = $1 WHERE player_id = $2",
-                new_id,
-                old_id,
-            )
-            .execute(&mut *tx)
-            .await?;
-
-            sqlx::query!(
-                "UPDATE player SET player_id = $1 WHERE player_id = $2",
-                new_id,
-                old_id,
-            )
-            .execute(&mut *tx)
-            .await?;
-
-            tx.commit().await?;
+            move_id(*old_id, new_id, &db).await?;
         }
-
         pb.inc(1);
     }
-
+    // Remaining IDs in parallel using an unordered buffer.
+    let mut unordered = FuturesUnordered::new();
+    for old_id in old_ids.iter().copied().filter(|&a| a > max_new_id) {
+        let db = db.clone();
+        let pb = pb.clone();
+        let id_map = id_map.clone();
+        unordered.push(async move {
+            if let Some(&new_id) = id_map.get(&old_id) {
+                move_id(old_id, new_id, &db).await.unwrap();
+            }
+            pb.inc(1);
+        });
+    }
+    while unordered.next().await.is_some() {}
     pb.finish_with_message("All player IDs updated!");
 
     println!("Re-adding FK constraint...");
@@ -168,6 +165,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
     }
+
+    Ok(())
+}
+
+async fn move_id(
+    old_id: i32,
+    new_id: i32,
+    db: &Pool<Postgres>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut tx = db.begin().await?;
+
+    sqlx::query!(
+        "UPDATE player_info SET player_id = $1 WHERE player_id = $2",
+        new_id,
+        old_id,
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query!(
+        "UPDATE player SET player_id = $1 WHERE player_id = $2",
+        new_id,
+        old_id,
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
 
     Ok(())
 }
