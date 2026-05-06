@@ -8,10 +8,9 @@
 
 use std::collections::HashMap;
 
+use futures::StreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
 use sqlx::{PgPool, Pool, Postgres};
-use futures::stream::FuturesUnordered;
-use futures::StreamExt;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -90,27 +89,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .progress_chars("#>-"),
     );
 
-    // Update the ids, that may be overwritten later first.
+    // Update IDs that may be overwritten later — sequential, in order.
     for old_id in old_ids.iter().take_while(|&&a| a <= max_new_id) {
         if let Some(&new_id) = id_map.get(old_id) {
             move_id(*old_id, new_id, &db).await?;
         }
         pb.inc(1);
     }
-    // Remaining IDs in parallel using an unordered buffer.
-    let mut unordered = FuturesUnordered::new();
-    for old_id in old_ids.iter().copied().filter(|&a| a > max_new_id) {
+
+    // Remaining IDs are safe (old_id > max_new_id, no collisions possible).
+    // Process them in batches with limited concurrency.
+    let safe_pairs: Vec<(i32, i32)> = old_ids
+        .iter()
+        .copied()
+        .filter(|&a| a > max_new_id)
+        .filter_map(|old_id| {
+            id_map.get(&old_id).map(|&new_id| (old_id, new_id))
+        })
+        .collect();
+
+    const BATCH_SIZE: usize = 1000;
+    const MAX_CONCURRENT: usize = 8;
+
+    futures::stream::iter(safe_pairs.chunks(BATCH_SIZE).map(|chunk| {
         let db = db.clone();
         let pb = pb.clone();
-        let id_map = id_map.clone();
-        unordered.push(async move {
-            if let Some(&new_id) = id_map.get(&old_id) {
-                move_id(old_id, new_id, &db).await.unwrap();
-            }
-            pb.inc(1);
-        });
-    }
-    while unordered.next().await.is_some() {}
+        async move {
+            move_ids_batch(chunk, &db).await.unwrap();
+            pb.inc(chunk.len() as u64);
+        }
+    }))
+    .buffer_unordered(MAX_CONCURRENT)
+    .for_each(|_| async {})
+    .await;
     pb.finish_with_message("All player IDs updated!");
 
     println!("Re-adding FK constraint...");
@@ -166,6 +177,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    Ok(())
+}
+
+async fn move_ids_batch(
+    batch: &[(i32, i32)],
+    db: &Pool<Postgres>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut tx = db.begin().await?;
+
+    // Build CASE expressions from the batch pairs.
+    // i32 values are safe to format directly (no SQL injection risk).
+    let old_ids_str: Vec<String> =
+        batch.iter().map(|(o, _)| o.to_string()).collect();
+    let case_whens: Vec<String> = batch
+        .iter()
+        .map(|(o, n)| format!("WHEN player_id = {o} THEN {n}"))
+        .collect();
+    let case_clause = case_whens.join(" ");
+    let id_list = old_ids_str.join(", ");
+
+    let pi_sql = format!(
+        "UPDATE player_info SET player_id = CASE {case_clause} END WHERE \
+         player_id IN ({id_list})"
+    );
+    sqlx::query(&pi_sql).execute(&mut *tx).await?;
+
+    let p_sql = format!(
+        "UPDATE player SET player_id = CASE {case_clause} END WHERE player_id \
+         IN ({id_list})"
+    );
+    sqlx::query(&p_sql).execute(&mut *tx).await?;
+
+    tx.commit().await?;
     Ok(())
 }
 
