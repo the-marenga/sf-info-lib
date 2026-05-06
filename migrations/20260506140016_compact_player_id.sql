@@ -1,3 +1,9 @@
+-- Optimize PostgreSQL settings for bulk UPDATE throughput
+-- Prevents hash-join memory starvation and speeds up index rebuilds
+SET work_mem = '8GB';
+SET maintenance_work_mem = '8GB';
+
+
 -- Drop indexes that would need maintenance during the UPDATEs.
 -- Without this, every row update would force 2 random btree ops per index
 -- (delete old entry, insert new entry). Rebuilding from scratch is much faster.
@@ -12,6 +18,13 @@ SELECT
     row_number() OVER (ORDER BY player_id) AS new_id
 FROM
     player;
+
+-- Add a primary key on the mapping table so the UPDATEs can use an
+-- Index Nested Loop Join instead of a Hash Join.
+-- Without this, the hash join needs ~6-8 GB RAM for 190M entries.
+-- If work_mem is insufficient, PostgreSQL batches the hash join,
+-- re-scanning the entire player_info table for each batch — disastrous.
+ALTER TABLE player_id_mapping ADD PRIMARY KEY (old_id);
 
 -- Drop the foreign key constraint from player_info
 -- The default name for this constraint is player_info_player_id_fkey
@@ -57,3 +70,8 @@ ALTER TABLE player_info ADD CONSTRAINT player_info_player_id_fkey
 -- Reset the sequence for player_id to the new maximum value
 -- If the table is empty, we set it to 1 and is_called to false
 SELECT setval('player_player_id_seq', (SELECT COALESCE(MAX(player_id), 1) FROM player), (SELECT EXISTS (SELECT 1 FROM player)));
+
+
+-- Reset configuration to defaults (for safety in case the connection is reused)
+RESET work_mem;
+RESET maintenance_work_mem;
