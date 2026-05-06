@@ -8,11 +8,27 @@
 
 use std::collections::HashMap;
 
+use clap::Parser;
+use futures::StreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
-use sqlx::{PgPool, Pool, Postgres};
+use sqlx::PgPool;
+
+#[derive(Parser)]
+#[command(name = "compact_ids")]
+struct Args {
+    /// Number of IDs to update in each batch
+    #[arg(long = "chunk-size", default_value = "100")]
+    chunk_size: usize,
+
+    /// Maximum number of batches to process concurrently
+    #[arg(long = "buffer-size", default_value = "10")]
+    buffer_size: usize,
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args = Args::parse();
+
     let database_url = std::env::var("DATABASE_URL").unwrap();
     let db = PgPool::connect(&database_url).await?;
 
@@ -81,7 +97,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .execute(&db)
     .await?;
 
-    println!("Starting ID updates (CTRL+C to abort at any point)...");
+    println!(
+        "Starting ID updates (chunk-size={}, buffer-size={}, CTRL+C to abort at any point)...",
+        args.chunk_size, args.buffer_size
+    );
 
     let pb = ProgressBar::new(total_players as u64);
     pb.set_style(
@@ -94,15 +113,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .progress_chars("#>-"),
     );
 
-    // Collect all pairs into a single flat list and process them sequentially.
-    // No parallelism — avoids concurrency safety issues entirely.
+    // Collect all pairs and process in concurrent batches
     let all_pairs: Vec<(i32, i32)> = id_map.iter().map(|(&o, &n)| (o, n)).collect();
 
     pb.inc(skipped as u64);
 
-    for (old_id, new_id) in &all_pairs {
-        move_id(*old_id, *new_id, &db).await?;
-        pb.inc(1);
+    let chunks: Vec<&[(i32, i32)]> = all_pairs.chunks(args.chunk_size).collect();
+
+    let results = futures::stream::iter(chunks)
+        .map(|chunk| async {
+            let mut tx = db.begin().await?;
+
+            let values: Vec<String> = chunk
+                .iter()
+                .map(|(old_id, new_id)| format!("({old_id}, {new_id})"))
+                .collect();
+            let values_str = values.join(", ");
+
+            // Update player_info table first (FK is dropped so order doesn't matter)
+            let info_sql = format!(
+                "WITH v(old_id, new_id) AS (VALUES {values_str}) \
+                 UPDATE player_info SET player_id = v.new_id FROM v \
+                 WHERE player_info.player_id = v.old_id"
+            );
+            sqlx::query(&info_sql).execute(&mut *tx).await?;
+
+            // Update player table
+            let player_sql = format!(
+                "WITH v(old_id, new_id) AS (VALUES {values_str}) \
+                 UPDATE player SET player_id = v.new_id FROM v \
+                 WHERE player.player_id = v.old_id"
+            );
+            sqlx::query(&player_sql).execute(&mut *tx).await?;
+
+            tx.commit().await?;
+            pb.inc(chunk.len() as u64);
+            Ok::<_, Box<dyn std::error::Error>>(())
+        })
+        .buffer_unordered(args.buffer_size)
+        .collect::<Vec<Result<(), Box<dyn std::error::Error>>>>()
+        .await;
+
+    for result in results {
+        result?;
     }
 
     pb.finish_with_message("All player IDs updated!");
@@ -162,27 +215,3 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
-
-async fn move_id(
-    old_id: i32,
-    new_id: i32,
-    db: &Pool<Postgres>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let mut tx = db.begin().await?;
-
-    sqlx::query("UPDATE player_info SET player_id = $1 WHERE player_id = $2")
-        .bind(new_id)
-        .bind(old_id)
-        .execute(&mut *tx)
-        .await?;
-
-    sqlx::query("UPDATE player SET player_id = $1 WHERE player_id = $2")
-        .bind(new_id)
-        .bind(old_id)
-        .execute(&mut *tx)
-        .await?;
-
-    tx.commit().await?;
-    Ok(())
-}
-
