@@ -8,7 +8,6 @@
 
 use std::collections::HashMap;
 
-use futures::StreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
 use sqlx::{PgPool, Pool, Postgres};
 
@@ -89,39 +88,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .progress_chars("#>-"),
     );
 
-    // Update IDs that may be overwritten later — sequential, in order.
-    for old_id in old_ids.iter().take_while(|&&a| a <= max_new_id) {
-        if let Some(&new_id) = id_map.get(old_id) {
-            move_id(*old_id, new_id, &db).await?;
-        }
-        pb.inc(1);
-    }
+    // Collect all pairs into a single flat list and batch them sequentially.
+    // No parallelism — avoids concurrency safety issues entirely.
+    let all_pairs: Vec<(i32, i32)> = id_map.iter().map(|(&o, &n)| (o, n)).collect();
 
-    // Remaining IDs are safe (old_id > max_new_id, no collisions possible).
-    // Process them in batches with limited concurrency.
-    let safe_pairs: Vec<(i32, i32)> = old_ids
-        .iter()
-        .copied()
-        .filter(|&a| a > max_new_id)
-        .filter_map(|old_id| {
-            id_map.get(&old_id).map(|&new_id| (old_id, new_id))
-        })
-        .collect();
+    pb.inc(skipped as u64);
 
     const BATCH_SIZE: usize = 1000;
-    const MAX_CONCURRENT: usize = 8;
 
-    futures::stream::iter(safe_pairs.chunks(BATCH_SIZE).map(|chunk| {
-        let db = db.clone();
-        let pb = pb.clone();
-        async move {
-            move_ids_batch(chunk, &db).await.unwrap();
-            pb.inc(chunk.len() as u64);
-        }
-    }))
-    .buffer_unordered(MAX_CONCURRENT)
-    .for_each(|_| async {})
-    .await;
+    for chunk in all_pairs.chunks(BATCH_SIZE) {
+        move_ids_batch(chunk, &db).await?;
+        pb.inc(chunk.len() as u64);
+    }
+
     pb.finish_with_message("All player IDs updated!");
 
     println!("Re-adding FK constraint...");
@@ -213,30 +192,3 @@ async fn move_ids_batch(
     Ok(())
 }
 
-async fn move_id(
-    old_id: i32,
-    new_id: i32,
-    db: &Pool<Postgres>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let mut tx = db.begin().await?;
-
-    sqlx::query!(
-        "UPDATE player_info SET player_id = $1 WHERE player_id = $2",
-        new_id,
-        old_id,
-    )
-    .execute(&mut *tx)
-    .await?;
-
-    sqlx::query!(
-        "UPDATE player SET player_id = $1 WHERE player_id = $2",
-        new_id,
-        old_id,
-    )
-    .execute(&mut *tx)
-    .await?;
-
-    tx.commit().await?;
-
-    Ok(())
-}
