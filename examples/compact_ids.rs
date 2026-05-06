@@ -33,19 +33,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .fetch_all(&db)
             .await?;
 
-    let mut id_map: HashMap<i32, i32> = HashMap::with_capacity(old_ids.len());
-    let mut max_new_id: i32 = 0;
-    for old_id in &old_ids {
-        max_new_id += 1;
-        if *old_id != max_new_id {
-            id_map.insert(*old_id, max_new_id);
-        }
+    let n = total_players as i32;
+    let existing: std::collections::HashSet<i32> = old_ids.iter().copied().collect();
+
+    // Available slots in [1, n] that are not occupied
+    let available: Vec<i32> = (1..=n).filter(|id| !existing.contains(id)).collect();
+
+    // IDs > n that need to be moved into available slots (descending order)
+    let mut to_move: Vec<i32> = old_ids.iter().copied().filter(|id| *id > n).collect();
+    to_move.sort_unstable_by(|a, b| b.cmp(a));
+
+    let mut id_map: HashMap<i32, i32> = HashMap::with_capacity(to_move.len());
+    for (i, old_id) in to_move.iter().enumerate() {
+        id_map.insert(*old_id, available[i]);
     }
 
     let to_update = id_map.len();
     let skipped = total_players as usize - to_update;
     println!(
-        "{skipped} players already at the correct ID (skipped). {to_update} \
+        "{skipped} players already within range (skipped). {to_update} \
          need reassignment."
     );
 
@@ -88,17 +94,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .progress_chars("#>-"),
     );
 
-    // Collect all pairs into a single flat list and batch them sequentially.
+    // Collect all pairs into a single flat list and process them sequentially.
     // No parallelism — avoids concurrency safety issues entirely.
     let all_pairs: Vec<(i32, i32)> = id_map.iter().map(|(&o, &n)| (o, n)).collect();
 
     pb.inc(skipped as u64);
 
-    const BATCH_SIZE: usize = 1000;
-
-    for chunk in all_pairs.chunks(BATCH_SIZE) {
-        move_ids_batch(chunk, &db).await?;
-        pb.inc(chunk.len() as u64);
+    for (old_id, new_id) in &all_pairs {
+        move_id(*old_id, *new_id, &db).await?;
+        pb.inc(1);
     }
 
     pb.finish_with_message("All player IDs updated!");
@@ -159,34 +163,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn move_ids_batch(
-    batch: &[(i32, i32)],
+async fn move_id(
+    old_id: i32,
+    new_id: i32,
     db: &Pool<Postgres>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut tx = db.begin().await?;
 
-    // Build CASE expressions from the batch pairs.
-    // i32 values are safe to format directly (no SQL injection risk).
-    let old_ids_str: Vec<String> =
-        batch.iter().map(|(o, _)| o.to_string()).collect();
-    let case_whens: Vec<String> = batch
-        .iter()
-        .map(|(o, n)| format!("WHEN player_id = {o} THEN {n}"))
-        .collect();
-    let case_clause = case_whens.join(" ");
-    let id_list = old_ids_str.join(", ");
+    sqlx::query("UPDATE player_info SET player_id = $1 WHERE player_id = $2")
+        .bind(new_id)
+        .bind(old_id)
+        .execute(&mut *tx)
+        .await?;
 
-    let pi_sql = format!(
-        "UPDATE player_info SET player_id = CASE {case_clause} END WHERE \
-         player_id IN ({id_list})"
-    );
-    sqlx::query(&pi_sql).execute(&mut *tx).await?;
-
-    let p_sql = format!(
-        "UPDATE player SET player_id = CASE {case_clause} END WHERE player_id \
-         IN ({id_list})"
-    );
-    sqlx::query(&p_sql).execute(&mut *tx).await?;
+    sqlx::query("UPDATE player SET player_id = $1 WHERE player_id = $2")
+        .bind(new_id)
+        .bind(old_id)
+        .execute(&mut *tx)
+        .await?;
 
     tx.commit().await?;
     Ok(())
