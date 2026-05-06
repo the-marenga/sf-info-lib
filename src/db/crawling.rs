@@ -1,4 +1,4 @@
-use std::fmt::Write;
+use std::{collections::HashSet, fmt::Write};
 
 use chrono::{DateTime, Utc};
 use sf_api::gamestate::{ServerTime, items::Equipment, social::*};
@@ -585,16 +585,33 @@ pub async fn insert_hof_pages(args: ReportHofArgs) -> Result<(), SFSError> {
             continue;
         }
 
-        let mut b = sqlx::QueryBuilder::new(
-            "INSERT INTO player (server_id, name, level) ",
-        );
-        b.push_values(players, |mut b, player| {
-            b.push_bind(server_id)
-                .push_bind(player.name)
-                .push_bind(player.level as i32);
-        });
-        b.push(" ON CONFLICT DO NOTHING");
-        b.build().execute(&mut *tx).await?;
+        // Filter out existing players to avoid incrementing the SERIAL sequence
+        let player_names: Vec<String> =
+            players.iter().map(|p| p.name.clone()).collect();
+        let existing_names: HashSet<String> = sqlx::query_scalar!(
+            "SELECT name FROM player WHERE server_id = $1 AND name = ANY($2)",
+            server_id,
+            &player_names
+        )
+        .fetch_all(&mut *tx)
+        .await?
+        .into_iter()
+        .collect();
+
+        players.retain(|p| !existing_names.contains(&p.name));
+
+        if !players.is_empty() {
+            let mut b = sqlx::QueryBuilder::new(
+                "INSERT INTO player (server_id, name, level) ",
+            );
+            b.push_values(players, |mut b, player| {
+                b.push_bind(server_id)
+                    .push_bind(player.name)
+                    .push_bind(player.level as i32);
+            });
+            b.push(" ON CONFLICT DO NOTHING");
+            b.build().execute(&mut *tx).await?;
+        }
         tx.commit().await?;
     }
     Ok(())
