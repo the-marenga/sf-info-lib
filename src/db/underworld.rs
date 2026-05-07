@@ -8,9 +8,11 @@ use nohash_hasher::IntMap;
 use tokio::sync::RwLock;
 
 use crate::{
-    db::{update::UPDATE_SENDER, *},
+    db::{
+        CacheMap, CharacterInfo, get_db, get_server_id, update::UPDATE_SENDER,
+    },
     error::SFSError,
-    types::*,
+    types::{UnderworldAdvice, UnderworldAdviceArgs},
 };
 
 static NUDE_PLAYER_CACHE: CacheMap<i32, Arc<[UnderworldCacheEntry]>> =

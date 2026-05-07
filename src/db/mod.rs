@@ -37,7 +37,7 @@ pub async fn get_db() -> Result<Pool<Postgres>, SFSError> {
     let get_options = || {
         sqlx::postgres::PgPoolOptions::new()
             .max_connections(500)
-            .max_lifetime(Some(Duration::from_secs(60 * 3)))
+            .max_lifetime(Some(Duration::from_mins(3)))
             .min_connections(10)
             .acquire_timeout(Duration::from_secs(100))
     };

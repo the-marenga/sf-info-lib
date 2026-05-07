@@ -1,16 +1,23 @@
 use std::{collections::HashSet, fmt::Write};
 
 use chrono::{DateTime, Utc};
-use sf_api::gamestate::{ServerTime, items::Equipment, social::*};
+use sf_api::gamestate::{
+    ServerTime,
+    items::Equipment,
+    social::{HallOfFamePlayer, OtherPlayer},
+};
 
 use crate::{
-    common::*,
+    common::{compress_ident, days, hours, minutes},
     db::{
+        CharacterInfo, get_db, get_server_id,
         update::{PlayerUpdate, UPDATE_SENDER},
-        *,
     },
     error::SFSError,
-    types::*,
+    types::{
+        CrawlReport, GetCharactersArgs, GetHofArgs, RawOtherPlayer,
+        ReportHofArgs,
+    },
 };
 
 pub async fn handle_crawl_report(report: CrawlReport) -> Result<(), SFSError> {
