@@ -11,18 +11,164 @@ use sqlx::{Pool, Postgres};
 use tokio::sync::RwLock;
 
 use crate::{
-    common::*,
-    db::{update::UPDATE_SENDER, *},
+    common::{compress_ident, hours},
+    db::{CacheEntry, CacheMap, get_db, get_server_id, update::UPDATE_SENDER},
     error::SFSError,
-    types::*,
+    types::{ScrapBookAdvice, ScrapBookAdviceArgs},
 };
+
+// ── Delta+Varint compressed sorted integer array ──
+
+/// Stores a sorted array of `i32` values using delta encoding + varint
+/// compression.
+///
+/// Memory layout:
+/// - `first`: the first (minimum) value
+/// - `data`: varint-encoded deltas between consecutive values
+/// - `len`: total number of elements
+///
+/// Typical compression: ~2 bytes per entry (vs 4 for raw `i32`).
+#[derive(Debug, Clone)]
+pub struct DeltaVarintArray {
+    data: Box<[u8]>,
+    first: i32,
+    len: u32,
+}
+
+impl DeltaVarintArray {
+    /// Build a compressed array from a **sorted** slice of values.
+    fn from_sorted(values: &[i32]) -> Self {
+        if values.is_empty() {
+            return Self {
+                data: Box::new([]),
+                first: 0,
+                len: 0,
+            };
+        }
+        let mut encoded = Vec::with_capacity(values.len());
+        let first = values.first().copied().unwrap_or(0);
+        let mut prev = first as u64;
+        for v in values.get(1..).unwrap_or_default().iter().copied() {
+            let delta = (v as u64).wrapping_sub(prev);
+            encode_varint(delta, &mut encoded);
+            prev = v as u64;
+        }
+        Self {
+            data: encoded.into_boxed_slice(),
+            first,
+            len: values.len() as u32,
+        }
+    }
+
+    /// Decompress to a `Vec<i32>`.
+    fn to_vec(&self) -> Vec<i32> {
+        let mut result = Vec::with_capacity(self.len as usize);
+        if self.len == 0 {
+            return result;
+        }
+        result.push(self.first);
+        let mut current = self.first as u64;
+        let mut pos = 0;
+        while pos < self.data.len() {
+            let (delta, bytes) =
+                decode_varint(self.data.get(pos..).unwrap_or_default());
+            current = current.wrapping_add(delta);
+            result.push(current as i32);
+            pos += bytes;
+        }
+        result
+    }
+
+    /// Returns `true` if the array is empty.
+    #[allow(dead_code)]
+    fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Returns the number of elements.
+    #[allow(dead_code)]
+    fn len(&self) -> usize {
+        self.len as usize
+    }
+
+    /// Iterate over the decompressed values (lazy, no allocation).
+    #[allow(clippy::iter_without_into_iter)]
+    pub(crate) fn iter(&self) -> DeltaVarintIter<'_> {
+        DeltaVarintIter {
+            data: &self.data,
+            pos: 0,
+            current: self.first as u64,
+            remaining: self.len as usize,
+        }
+    }
+}
+
+/// Lazy iterator over a `DeltaVarintArray`.
+pub(crate) struct DeltaVarintIter<'a> {
+    data: &'a [u8],
+    pos: usize,
+    current: u64,
+    remaining: usize,
+}
+
+impl Iterator for DeltaVarintIter<'_> {
+    type Item = i32;
+
+    fn next(&mut self) -> Option<i32> {
+        if self.remaining == 0 {
+            return None;
+        }
+        let result = self.current as i32;
+        self.remaining -= 1;
+        if self.remaining > 0 {
+            let (delta, bytes_read) =
+                decode_varint(self.data.get(self.pos..).unwrap_or_default());
+            self.current = self.current.wrapping_add(delta);
+            self.pos += bytes_read;
+        }
+        Some(result)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
+    }
+}
+
+fn encode_varint(mut value: u64, buf: &mut Vec<u8>) {
+    loop {
+        if value < 128 {
+            buf.push(value as u8);
+            break;
+        }
+        buf.push((value as u8 & 0x7F) | 0x80);
+        value >>= 7;
+    }
+}
+
+fn decode_varint(buf: &[u8]) -> (u64, usize) {
+    let mut result = 0u64;
+    let mut shift = 0;
+    let mut bytes_read = 0;
+    for &byte in buf {
+        bytes_read += 1;
+        result |= u64::from(byte & 0x7F) << shift;
+        if byte & 0x80 == 0 {
+            break;
+        }
+        shift += 7;
+        assert!(shift <= 63, "varint too long");
+    }
+    (result, bytes_read)
+}
+
+// ── Scrapbook data structures ──
 
 #[derive(Debug, Default)]
 pub(crate) struct ServerScrapbookInfo {
     // playerid => stats
     pub(crate) player_info: IntMap<i32, u64>,
-    // Equipment id => player ids
-    pub(crate) equipment: IntMap<i32, Box<[i32]>>,
+    // Equipment id => player ids (compressed, sorted)
+    pub(crate) equipment: IntMap<i32, DeltaVarintArray>,
 }
 
 // Maps the server_id to a info about items on that server
@@ -40,10 +186,14 @@ pub(crate) async fn update_scrapbook_cache(
     let is_initial_fetch = cache_entry.equipment.is_empty();
 
     let mut player_info = cache_entry.player_info.clone();
-    let mut equipment: HashMap<i32, HashSet<i32>> = cache_entry
+
+    // Decompress equipment arrays to Vec<i32> for mutation.
+    // This uses ~14 MB temporary memory per server instead of ~130 MB
+    // (HashSet).
+    let mut equipment: HashMap<i32, Vec<i32>> = cache_entry
         .equipment
         .iter()
-        .map(|a| (*a.0, a.1.iter().copied().collect()))
+        .map(|(eq_id, arr)| (*eq_id, arr.to_vec()))
         .collect();
 
     drop(cache_entry);
@@ -54,23 +204,38 @@ pub(crate) async fn update_scrapbook_cache(
         if is_initial_fetch {
             // No need to clear old entries, we just insert all players
             for equip_ident in player_equip {
-                equipment.entry(equip_ident).or_default().insert(pid);
+                equipment.entry(equip_ident).or_default().push(pid);
             }
             continue;
         }
 
-        for (ident, equipment) in &mut equipment {
-            // player_equip is <= 10 elements, so constructing and querying a
-            // hashset would likely be slower here
-            if player_equip.contains(ident) {
-                equipment.insert(pid);
+        for (ident, players) in &mut equipment {
+            // player_equip is <= 10 elements, so a linear scan is cheaper
+            // than building a hashset for each update.
+            let currently_owns = player_equip.contains(ident);
+
+            if currently_owns {
+                // Insert only if not already present (binary search).
+                let Err(idx) = players.binary_search(&pid) else {
+                    continue;
+                };
+                players.insert(idx, pid);
             } else {
-                // Remove any old equipment. This will mostly remove nothing,
-                // but we have to do this. The alternative would be to track
-                // the old equipment (which is what the helper does), but that
-                // roughly doubles the memory usage, so no...
-                equipment.remove(&pid);
+                // Remove if present (binary search).
+                if let Ok(idx) = players.binary_search(&pid) {
+                    players.remove(idx);
+                }
             }
+        }
+    }
+
+    // Re-sort and dedup equipment arrays that were modified during initial
+    // fetch. (Incremental updates maintain sorted order via binary-search
+    // inserts.)
+    if is_initial_fetch {
+        for players in equipment.values_mut() {
+            players.sort_unstable();
+            players.dedup();
         }
     }
 
@@ -78,7 +243,7 @@ pub(crate) async fn update_scrapbook_cache(
         player_info,
         equipment: equipment
             .into_iter()
-            .map(|(a, b)| (a, b.into_iter().collect()))
+            .map(|(eq_id, vec)| (eq_id, DeltaVarintArray::from_sorted(&vec)))
             .collect(),
     };
 
@@ -150,7 +315,7 @@ pub async fn get_scrapbook_advice(
 async fn calc_best_targets(
     args: &ScrapBookAdviceArgs,
     player_info: &IntMap<i32, u64>,
-    equipment: &IntMap<i32, Box<[i32]>>,
+    equipment: &IntMap<i32, DeltaVarintArray>,
     db: &Pool<Postgres>,
 ) -> Result<Vec<ScrapBookAdvice>, SFSError> {
     let result_limit = 10;
@@ -183,11 +348,12 @@ pub struct CharacterInfo {
     pub(crate) level: u16,
 }
 
+#[must_use]
 pub fn calc_per_player_count(
     // player => Detailed info
     player_info: &IntMap<i32, u64>,
     // equipment => players
-    equipment: &IntMap<i32, Box<[i32]>>,
+    equipment: &IntMap<i32, DeltaVarintArray>,
     // the items the player already has
     scrapbook: &HashSet<i32>,
     max_attrs: u64,
@@ -199,8 +365,8 @@ pub fn calc_per_player_count(
         if scrapbook.contains(eq) {
             continue;
         }
-        for player in players {
-            *per_player_counts.entry(*player).or_insert(0) += 1;
+        for player in players.iter() {
+            *per_player_counts.entry(player).or_insert(0) += 1;
         }
     }
 

@@ -50,13 +50,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .await?;
 
     let n = total_players as i32;
-    let existing: std::collections::HashSet<i32> = old_ids.iter().copied().collect();
+    let existing: std::collections::HashSet<i32> =
+        old_ids.iter().copied().collect();
 
     // Available slots in [1, n] that are not occupied
-    let available: Vec<i32> = (1..=n).filter(|id| !existing.contains(id)).collect();
+    let available: Vec<i32> =
+        (1..=n).filter(|id| !existing.contains(id)).collect();
 
     // IDs > n that need to be moved into available slots (descending order)
-    let mut to_move: Vec<i32> = old_ids.iter().copied().filter(|id| *id > n).collect();
+    let mut to_move: Vec<i32> =
+        old_ids.iter().copied().filter(|id| *id > n).collect();
     to_move.sort_unstable_by(|a, b| b.cmp(a));
 
     let mut id_map: HashMap<i32, i32> = HashMap::with_capacity(to_move.len());
@@ -67,8 +70,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let to_update = id_map.len();
     let skipped = total_players as usize - to_update;
     println!(
-        "{skipped} players already within range (skipped). {to_update} \
-         need reassignment."
+        "{skipped} players already within range (skipped). {to_update} need \
+         reassignment."
     );
 
     if to_update == 0 {
@@ -98,7 +101,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?;
 
     println!(
-        "Starting ID updates (chunk-size={}, buffer-size={}, CTRL+C to abort at any point)...",
+        "Starting ID updates (chunk-size={}, buffer-size={}, CTRL+C to abort \
+         at any point)...",
         args.chunk_size, args.buffer_size
     );
 
@@ -114,11 +118,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Collect all pairs and process in concurrent batches
-    let all_pairs: Vec<(i32, i32)> = id_map.iter().map(|(&o, &n)| (o, n)).collect();
+    let all_pairs: Vec<(i32, i32)> =
+        id_map.iter().map(|(&o, &n)| (o, n)).collect();
 
     pb.inc(skipped as u64);
 
-    let chunks: Vec<&[(i32, i32)]> = all_pairs.chunks(args.chunk_size).collect();
+    let chunks: Vec<&[(i32, i32)]> =
+        all_pairs.chunks(args.chunk_size).collect();
 
     let results = futures::stream::iter(chunks)
         .map(|chunk| async {
@@ -130,19 +136,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .collect();
             let values_str = values.join(", ");
 
-            // Update player_info table first (FK is dropped so order doesn't matter)
+            // Update player_info table first (FK is dropped so order doesn't
+            // matter)
             let info_sql = format!(
-                "WITH v(old_id, new_id) AS (VALUES {values_str}) \
-                 UPDATE player_info SET player_id = v.new_id FROM v \
-                 WHERE player_info.player_id = v.old_id"
+                "WITH v(old_id, new_id) AS (VALUES {values_str}) UPDATE \
+                 player_info SET player_id = v.new_id FROM v WHERE \
+                 player_info.player_id = v.old_id"
             );
             sqlx::query(&info_sql).execute(&mut *tx).await?;
 
             // Update player table
             let player_sql = format!(
-                "WITH v(old_id, new_id) AS (VALUES {values_str}) \
-                 UPDATE player SET player_id = v.new_id FROM v \
-                 WHERE player.player_id = v.old_id"
+                "WITH v(old_id, new_id) AS (VALUES {values_str}) UPDATE \
+                 player SET player_id = v.new_id FROM v WHERE \
+                 player.player_id = v.old_id"
             );
             sqlx::query(&player_sql).execute(&mut *tx).await?;
 

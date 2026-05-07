@@ -5,18 +5,22 @@ use sf_api::gamestate::unlockables::EquipmentIdent;
 
 use crate::types::ServerCategory;
 
+#[must_use]
 pub const fn minutes(minutes: u64) -> Duration {
     Duration::from_secs(60 * minutes)
 }
+#[must_use]
 pub const fn hours(hours: u64) -> Duration {
     Duration::from_secs(60 * 60 * hours)
 }
+#[must_use]
 pub const fn days(days: u64) -> Duration {
     Duration::from_secs(60 * 60 * 24 * days)
 }
 
 /// Compresses the original Equipment Ident into a single i32
 #[cfg(feature = "db")]
+#[must_use]
 pub fn compress_ident(
     ident: sf_api::gamestate::unlockables::EquipmentIdent,
 ) -> i32 {
@@ -31,6 +35,7 @@ pub fn compress_ident(
 
 #[cfg(feature = "db")]
 #[allow(clippy::missing_panics_doc)]
+#[must_use]
 pub fn decompress_ident(ident: i32) -> EquipmentIdent {
     use sf_api::gamestate::{character::Class, items::EquipmentSlot};
     let model_id = ident & 0xFF;
@@ -66,6 +71,7 @@ pub fn decompress_ident(ident: i32) -> EquipmentIdent {
     }
 }
 
+#[must_use]
 pub fn ident_to_info(ident: &str) -> (String, ServerCategory) {
     if ident == "maerwin" {
         return (format!("{ident}@sfgame.net"), ServerCategory::Fused);
@@ -90,6 +96,7 @@ pub fn ident_to_info(ident: &str) -> (String, ServerCategory) {
 }
 
 /// Takes in the url of an official s&f server and
+#[must_use]
 pub fn url_to_info(url: &str) -> Option<(String, ServerCategory)> {
     let (id, tld) = url
         .trim_start_matches("https://")
