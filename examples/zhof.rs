@@ -1,12 +1,16 @@
-use std::{collections::BTreeMap, io::Read, time::Duration};
+use std::{collections::BTreeMap, io::Write, time::Duration};
 
 use chrono::{DateTime, NaiveDate, Utc};
 use clap::Parser;
-use flate2::{Compression, bufread::ZlibEncoder};
+use flate2::{Compression, write::ZlibEncoder};
+use futures::TryStreamExt;
 use indicatif::ProgressStyle;
 use serde::{Deserialize, Serialize};
 use sf_api::gamestate::{character::Class, unlockables::EquipmentIdent};
-use sf_info_lib::{common::decompress_ident, db::get_db};
+use sf_info_lib::{
+    common::{days, decompress_ident},
+    db::get_db,
+};
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct ZHofBackup {
@@ -70,8 +74,14 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     let db = get_db().await?;
+
+    let now = Utc::now().naive_utc();
+    let three_days_ago = now - days(3);
+
     let server_ids = sqlx::query!(
-        "SELECT server_id, url FROM server ORDER BY server_id ASC"
+        "SELECT server_id, url FROM server WHERE last_hof_crawl > $1 ORDER BY \
+         server_id ASC",
+        three_days_ago
     )
     .fetch_all(&db)
     .await?;
@@ -80,11 +90,6 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .into_iter()
         .filter(|a| args.url.as_ref().is_none_or(|b| a.url.contains(b)))
     {
-        let mut zhof = ZHofBackup {
-            export_time: Some(Utc::now()),
-            ..Default::default()
-        };
-
         let bar = indicatif::ProgressBar::new_spinner();
         let style = ProgressStyle::default_spinner()
             .template(
@@ -97,27 +102,60 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
         bar.set_prefix(server.url.clone());
         bar.set_message("Loading player data");
 
-        let players = sqlx::query!(
-            "SELECT name, level, server_player_id, equipment
-            FROM player
-            WHERE player.server_id = $1 AND is_removed = FALSE AND level is \
-             not null
-            ",
+        let count = sqlx::query_scalar!(
+            "SELECT COUNT(*) FROM player WHERE server_id = $1 AND is_removed \
+             = FALSE AND level IS NOT NULL",
             server.server_id
         )
-        .fetch_all(&db)
-        .await?;
+        .fetch_one(&db)
+        .await?
+        .unwrap_or(0) as u64;
 
-        bar.set_length(players.len() as u64);
+        if count == 0 {
+            continue;
+        }
+
+        bar.set_length(count);
         bar.set_message("Processing players...");
 
-        for rec in players {
+        let server_ident = server
+            .url
+            .trim_start_matches("https:")
+            .replace(['/', '.'], "");
+        let path = format!("{server_ident}.zhof");
+
+        let file = std::fs::File::create(&path)?;
+        let mut encoder = ZlibEncoder::new(file, Compression::best());
+
+        // Write JSON opening — header fields + start of characters array
+        write!(
+            encoder,
+            r#"{{"export_time":"{}","characters":["#,
+            Utc::now().to_rfc3339()
+        )?;
+
+        let mut stream = sqlx::query!(
+            "SELECT name, level, server_player_id, equipment
+            FROM player
+            WHERE server_id = $1 AND is_removed = FALSE AND level IS NOT NULL",
+            server.server_id
+        )
+        .fetch(&db);
+
+        let mut first = true;
+
+        while let Some(rec) = stream.try_next().await? {
             let Some(level) = rec.level else {
                 continue;
             };
             let Some(uid) = rec.server_player_id else {
                 continue;
             };
+
+            if !first {
+                write!(encoder, ",")?;
+            }
+            first = false;
 
             let equipment: Vec<_> = rec
                 .equipment
@@ -135,29 +173,19 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 fetch_date: None,
                 class: None,
             };
-            zhof.characters.push(info);
+
+            serde_json::to_writer(&mut encoder, &info)?;
             bar.inc(1);
         }
 
-        // TODO: Do this without keeping it all in memory
-        let serialized = serde_json::to_string(&zhof)?;
-        let mut encoder =
-            ZlibEncoder::new(serialized.as_bytes(), Compression::best());
-        let mut res = Vec::new();
-        encoder.read_to_end(&mut res)?;
-
-        let server_ident = server
-            .url
-            .trim_start_matches("https:")
-            .replace(['/', '.'], "");
-        let path = format!("{server_ident}.zhof");
-
-        std::fs::write(&path, &res)?;
+        write!(encoder, "]}}")?;
+        encoder.finish()?;
 
         std::fs::write(
             format!("{server_ident}.version"),
             Utc::now().to_rfc2822(),
         )?;
+
         bar.finish_and_clear();
     }
 
