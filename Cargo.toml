@@ -14,7 +14,7 @@ sqlx = { version = "0.8", features = [
     "chrono",
 ], optional = true }
 thiserror = "2.0"
-sf-api = { version = "0.4.2", optional = true }
+sf-api = { version = "0.4.2", default-features = false, features = ["serde"] }
 log = { version = "0.4", optional = true }
 url = { version = "2.5", optional = true }
 tokio = { version = "1.52", optional = true }
@@ -34,12 +34,12 @@ clap = { version = "4.6.1", features = ["derive"] }
 [features]
 default = ["db"]
 db = [
+    "sf-api/sso",
     "dep:serde_json",
     "dep:chrono",
     "dep:fastrand",
     "dep:log",
     "dep:nohash-hasher",
-    "dep:sf-api",
     "dep:sqlx",
     "dep:tokio",
     "dep:url",

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
-use sf_api::session::Response;
+use sf_api::response::Response;
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct GetHofArgs {
