@@ -351,7 +351,10 @@ pub async fn insert_player(
         pid,
         fetch_time,
         other.level as i16,
-        other.fortress.as_ref().map(|a| a.soldier_advice as i16),
+        other
+            .fortress
+            .as_ref()
+            .map_or(0, |a| a.soldier_advice as i16),
         description_id,
         guild_id,
         response_id,
