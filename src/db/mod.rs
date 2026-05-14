@@ -16,9 +16,10 @@ use std::{
 pub use crawling::*;
 pub use mfbot::*;
 pub use scrapbook::*;
+use sf_api::gamestate::GameState;
 use sqlx::{Pool, Postgres};
 pub use stats::*;
-use tokio::sync::{Mutex, OnceCell, RwLock};
+use tokio::sync::{Mutex, MutexGuard, OnceCell, RwLock};
 
 use crate::error::SFSError;
 
@@ -46,6 +47,27 @@ pub async fn get_db() -> Result<Pool<Postgres>, SFSError> {
         .get_or_try_init(|| get_options().connect(env!("DATABASE_URL")))
         .await?
         .to_owned())
+}
+
+/// Pool of cached gamestates
+static GAMESTATE_POOL: LazyLock<Mutex<Vec<&'static Mutex<Box<GameState>>>>> =
+    LazyLock::new(|| Mutex::new(Vec::new()));
+
+/// Gets a gamestate from the pool of available gamestates. If the pool is
+/// exhausted (all locked), a new gamestate will be created
+pub async fn get_gamestate() -> MutexGuard<'static, Box<GameState>> {
+    let mut pool = GAMESTATE_POOL.lock().await;
+    if let Some(guard) = pool.iter().find_map(|m| m.try_lock().ok()) {
+        return guard;
+    }
+    // All locked — create a new one and add it to the pool
+    let new_gs = Box::new(GameState::default());
+    let new_mutex: &'static Mutex<Box<GameState>> =
+        Box::leak(Box::new(Mutex::new(new_gs)));
+    pool.push(new_mutex);
+    let gs = new_mutex.lock().await;
+    drop(pool);
+    gs
 }
 
 pub async fn get_server_id(

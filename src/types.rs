@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
+use sf_api::session::Response;
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct GetHofArgs {
@@ -24,16 +25,6 @@ pub struct BugReportArgs {
     pub stacktrace: Option<String>,
     pub additional_info: Option<String>,
     pub error_text: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct RawOtherPlayer {
-    pub info: String,
-    pub description: Option<String>,
-    pub guild: Option<String>,
-    pub soldier_advice: Option<i64>,
-    pub fetch_date: String,
-    pub raw_equipment: String,
 }
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
@@ -73,8 +64,8 @@ pub struct UnderworldAdvice {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ReportHofArgs {
     pub server: String,
-    // page => Ranklistplayer
-    pub pages: HashMap<u32, String>,
+    // page => Ranklistplayer response
+    pub pages: HashMap<u32, Response>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -116,7 +107,7 @@ pub struct ServerInfo {
 #[derive(Debug, Deserialize, Serialize)]
 /// Maps the player name to its crawled data. If the data is none, the
 /// player is no longer present on the server
-pub struct ServerPlayerReport(pub HashMap<String, Option<RawOtherPlayer>>);
+pub struct ServerPlayerReport(pub HashMap<String, Option<Response>>);
 
 #[derive(Debug, Deserialize, Serialize)]
 /// Maps the server url to its crawled players

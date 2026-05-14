@@ -1,23 +1,17 @@
-use std::{collections::HashSet, fmt::Write};
+use std::collections::HashSet;
 
-use chrono::{DateTime, Utc};
-use sf_api::gamestate::{
-    ServerTime,
-    items::Equipment,
-    social::{HallOfFamePlayer, OtherPlayer},
-};
+use chrono::Utc;
+use log::warn;
+use sf_api::{misc::to_sf_string, session::Response};
 
 use crate::{
     common::{compress_ident, days, hours, minutes},
     db::{
-        CharacterInfo, get_db, get_server_id,
+        CharacterInfo, get_db, get_gamestate, get_server_id,
         update::{PlayerUpdate, UPDATE_SENDER},
     },
     error::SFSError,
-    types::{
-        CrawlReport, GetCharactersArgs, GetHofArgs, RawOtherPlayer,
-        ReportHofArgs,
-    },
+    types::{CrawlReport, GetCharactersArgs, GetHofArgs, ReportHofArgs},
 };
 
 pub async fn handle_crawl_report(report: CrawlReport) -> Result<(), SFSError> {
@@ -86,68 +80,35 @@ pub async fn insert_player(
     db: &sqlx::Pool<sqlx::Postgres>,
     server_id: i32,
     player_name: String,
-    player: RawOtherPlayer,
+    player_response: Response,
 ) -> Result<(), SFSError> {
-    let data: Result<Vec<i64>, _> = player
-        .info
-        .trim()
-        .split('/')
-        .map(|a| a.trim().parse())
-        .collect();
-
-    let data = match data {
-        Ok(data) => data,
-        Err(e) => {
-            return Err(SFSError::InvalidPlayer(
-                format!("Could not parse player data for {player_name}: {e}")
-                    .into(),
-            ));
-        }
-    };
-    let mut other = match OtherPlayer::parse(&data, ServerTime::default()) {
-        Ok(other) => other,
-        Err(e) => {
-            return Err(SFSError::InvalidPlayer(
-                format!("Could not parse other player {player_name}: {e}")
-                    .into(),
-            ));
-        }
-    };
-    let equip_data: Result<Vec<i64>, _> = player
-        .raw_equipment
-        .trim()
-        .split('/')
-        .map(|a| a.trim().parse())
-        .collect();
-
-    let equip_data = match equip_data {
-        Ok(data) => data,
-        Err(e) => {
-            return Err(SFSError::InvalidPlayer(
-                format!("Could not parse player data for {player_name}: {e}")
-                    .into(),
-            ));
-        }
-    };
-    let other_equipment =
-        match Equipment::parse(&equip_data, ServerTime::default()) {
-            Ok(other) => other,
-            Err(e) => {
-                return Err(SFSError::InvalidPlayer(
-                    format!("Could not parse other player {player_name}: {e}")
-                        .into(),
-                ));
-            }
-        };
-    other.equipment = other_equipment;
-
-    let Ok(mut fetch_time) = DateTime::parse_from_rfc3339(&player.fetch_date)
-        .map(|a| a.to_utc().naive_utc())
+    let Some(resp_name) = player_response.values().get("otherplayername")
     else {
         return Err(SFSError::InvalidPlayer(
-            format!("Could not parse fetch date: {}", player.fetch_date).into(),
+            format!("Invalid response for '{player_name}': missing name key")
+                .into(),
         ));
     };
+
+    let mut gs = get_gamestate().await;
+    gs.lookup.reset_lookups();
+    gs.update(&player_response)
+        .map_err(|e| SFSError::InvalidPlayer(e.to_string().into()))?;
+
+    let Some(other) = gs.lookup.lookup_name(resp_name.as_str()) else {
+        return Err(SFSError::InvalidPlayer(
+            format!(
+                "Invalid response for '{player_name}': not found in lookup"
+            )
+            .into(),
+        ));
+    };
+    let other = other.clone();
+    drop(gs);
+
+    // TODO: Turn this into a UTC?
+    let mut fetch_time = player_response.received_at();
+
     let now = Utc::now().naive_utc();
     if fetch_time > now {
         fetch_time = now;
@@ -171,9 +132,9 @@ pub async fn insert_player(
     let equip_count = other.equipment.0.values().flatten().count() as i32;
 
     let attributes = other
-        .base_attributes
+        .attribute_basis
         .values()
-        .chain(other.bonus_attributes.values())
+        .chain(other.attribute_additions.values())
         .copied()
         .map(i64::from)
         .sum::<i64>();
@@ -191,7 +152,7 @@ pub async fn insert_player(
     .await?;
 
     let mut guild_id = None;
-    if let Some(guild) = &player.guild.filter(|a| !a.is_empty()) {
+    if let Some(guild) = other.guild.as_ref().filter(|a| !a.is_empty()) {
         let guild_name = guild;
 
         let mut id = sqlx::query_scalar!(
@@ -332,7 +293,7 @@ pub async fn insert_player(
         log::error!("Could not send update");
     }
 
-    let description = player.description.unwrap_or_default();
+    let description = to_sf_string(&other.description);
 
     let description_id = sqlx::query_scalar!(
         "SELECT description_id
@@ -358,10 +319,7 @@ pub async fn insert_player(
         }
     };
 
-    let new_raw_resp = reencode_response(&data, &player.raw_equipment)?;
-
-    let resp = zstd::stream::encode_all(new_raw_resp.as_bytes(), 3)
-        .map_err(|_| SFSError::Internal("Could not zstd compress response"))?;
+    let resp = reencode_response(&player_response)?;
 
     let response_id = sqlx::query_scalar!(
         "SELECT otherplayer_resp_id FROM otherplayer_resp WHERE \
@@ -376,7 +334,7 @@ pub async fn insert_player(
         None => {
             sqlx::query_scalar!(
                 "INSERT INTO otherplayer_resp (otherplayer_resp, version)
-                VALUES ($1, 3)
+                VALUES ($1, 4)
                 RETURNING otherplayer_resp_id",
                 &resp,
             )
@@ -393,7 +351,7 @@ pub async fn insert_player(
         pid,
         fetch_time,
         other.level as i16,
-        player.soldier_advice.map(|a| a as i16),
+        other.fortress.as_ref().map(|a| a.soldier_advice as i16),
         description_id,
         guild_id,
         response_id,
@@ -405,33 +363,40 @@ pub async fn insert_player(
 
     return Ok(tx.commit().await?);
 }
+pub fn reencode_response(response: &Response) -> Result<Vec<u8>, SFSError> {
+    use std::io::Write;
+    let mut compressor = zstd::stream::Encoder::new(Vec::new(), 3)?;
 
-pub static STORED_SPLIT_CHAR: char = '🎆';
-
-pub fn reencode_response(
-    data: &[i64],
-    equip_data: &str,
-) -> Result<String, SFSError> {
-    let mut new_raw_resp = String::new();
-    for (pos, num) in data.iter().enumerate() {
-        if !new_raw_resp.is_empty() {
-            new_raw_resp.push('/');
+    for (idx, (&key, value)) in response.values().iter().enumerate() {
+        if idx > 0 {
+            write!(compressor, "&")?;
         }
-        if pos == 6 || pos == 5 {
-            // Remove rank & honor, since that changes even if the player is
-            // inactive
-            new_raw_resp.push('0');
+
+        write!(compressor, "{key}")?;
+
+        if !value.sub_key().is_empty() {
+            write!(compressor, ".{}", value.sub_key())?;
+        }
+
+        write!(compressor, ":")?;
+
+        if key == "otherplayersavecharacter" {
+            for (i, val) in value.as_str().split('/').enumerate() {
+                if i > 0 {
+                    write!(compressor, "/")?;
+                }
+                if (6..=7).contains(&i) {
+                    write!(compressor, "0")?;
+                } else {
+                    write!(compressor, "{val}")?;
+                }
+            }
         } else {
-            new_raw_resp
-                .write_fmt(format_args!("{num}"))
-                .map_err(|_| SFSError::Internal("Reencode"))?;
+            write!(compressor, "{}", value.as_str())?;
         }
     }
-    if !equip_data.is_empty() {
-        new_raw_resp.push(STORED_SPLIT_CHAR);
-        new_raw_resp.push_str(equip_data);
-    }
-    Ok(new_raw_resp)
+
+    Ok(compressor.finish()?)
 }
 
 pub async fn get_characters_to_crawl(
@@ -558,26 +523,25 @@ pub async fn insert_hof_pages(args: ReportHofArgs) -> Result<(), SFSError> {
     let server_id = get_server_id(&db, args.server).await?;
 
     for (page, info) in args.pages {
-        let mut tx = db.begin().await?;
-        let mut players = vec![];
-        for player in info.as_str().trim_matches(';').split(';') {
-            // Stop parsing once we receive an empty player
-            if player.ends_with(",,,0,0,0,") {
-                break;
-            }
-            match HallOfFamePlayer::parse(player) {
-                Ok(x) => {
-                    if x.name.chars().all(|a| a.is_ascii_digit()) {
-                        // Looking up these names will actually look up the
-                        // player with that id, which can lead to issues
-                        continue;
-                    }
-                    players.push(x);
-                }
-                Err(err) => log::warn!("{err}"),
-            }
+        let mut gs = get_gamestate().await;
+        gs.hall_of_fames.players.clear();
+
+        if let Err(err) = gs.update(&info) {
+            warn!("Invalid hall of fame response: {err} - {info:?}");
+            continue;
         }
 
+        let mut players = vec![];
+        std::mem::swap(&mut players, &mut gs.hall_of_fames.players);
+        drop(gs);
+
+        players.retain(|player| {
+            // Looking up these names will actually look up the
+            // player with that id, which can lead to issues
+            !player.name.chars().all(|a| a.is_ascii_digit())
+        });
+
+        let mut tx = db.begin().await?;
         sqlx::query!(
             "DELETE FROM todo_hof_page
             WHERE server_id = $1 AND idx = $2",

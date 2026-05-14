@@ -12,4 +12,6 @@ pub enum SFSError {
     InvalidScrapbook,
     #[error("Invalid server")]
     InvalidServer,
+    #[error("Could not compress player response: {0}")]
+    Compression(#[from] std::io::Error),
 }

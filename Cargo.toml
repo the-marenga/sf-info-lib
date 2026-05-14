@@ -6,33 +6,35 @@ edition = "2024"
 [dependencies]
 chrono = { version = "0.4", optional = true }
 serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", optional = true }
 sqlx = { version = "0.8", features = [
     "runtime-tokio",
     "postgres",
     "macros",
-    "chrono"
+    "chrono",
 ], optional = true }
 thiserror = "2.0"
-sf-api = { git = "https://github.com/the-marenga/sf-api.git", branch = "other-player-pub", default-features = false, optional = true }
+sf-api = { version = "0.4.2", optional = true }
 log = { version = "0.4", optional = true }
 url = { version = "2.5", optional = true }
-tokio = { version = "1.51", optional = true }
+tokio = { version = "1.52", optional = true }
 fastrand = { version = "2.4", optional = true }
 zstd = { version = "0.13.3", optional = true }
-nohash-hasher = {version = "0.2.0", optional = true}
+nohash-hasher = { version = "0.2.0", optional = true }
 
 [dev-dependencies]
-tokio = { version = "1.51", features = ["full"] }
-futures = "*"
+tokio = { version = "1.52", features = ["full"] }
+futures = "0.3"
 indicatif = "0.18.4"
-sf-api = { git = "https://github.com/the-marenga/sf-api.git", branch = "other-player-pub" }
-serde_json = "*"
+sf-api = "0.4.2"
+serde_json = "1.0"
 flate2 = { version = "1.1.9", default-features = false, features = ["zlib"] }
-clap = { version = "4.6.0", features = ["derive"] }
+clap = { version = "4.6.1", features = ["derive"] }
 
 [features]
 default = ["db"]
 db = [
+    "dep:serde_json",
     "dep:chrono",
     "dep:fastrand",
     "dep:log",
@@ -49,7 +51,7 @@ unsafe_code = "deny"
 missing_debug_implementations = "warn"
 
 [lints.clippy]
-pedantic =  { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
 indexing_slicing = "warn"
 unwrap_used = "warn"
 expect_used = "warn"

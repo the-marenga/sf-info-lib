@@ -4,15 +4,19 @@ use std::{
     time::Instant,
 };
 
-use chrono::Utc;
+use chrono::{Local, Utc};
+use log::warn;
 use nohash_hasher::IntMap;
-use sf_api::gamestate::unlockables::ScrapBook;
+use sf_api::session::Response;
 use sqlx::{Pool, Postgres};
 use tokio::sync::RwLock;
 
 use crate::{
     common::{compress_ident, hours},
-    db::{CacheEntry, CacheMap, get_db, get_server_id, update::UPDATE_SENDER},
+    db::{
+        CacheEntry, CacheMap, get_db, get_gamestate, get_server_id,
+        update::UPDATE_SENDER,
+    },
     error::SFSError,
     types::{ScrapBookAdvice, ScrapBookAdviceArgs},
 };
@@ -319,7 +323,20 @@ async fn calc_best_targets(
     db: &Pool<Postgres>,
 ) -> Result<Vec<ScrapBookAdvice>, SFSError> {
     let result_limit = 10;
-    let Some(scrapbook) = ScrapBook::parse(&args.raw_scrapbook) else {
+    let mut gs = get_gamestate().await;
+    let Ok(response) = Response::parse(
+        format!("scrapbook:{}", args.raw_scrapbook),
+        Local::now().naive_utc(),
+    ) else {
+        warn!("Invalid scrapbook: {}", args.raw_scrapbook);
+        return Ok(vec![]);
+    };
+    gs.character.scrapbook = None;
+    if let Err(err) = gs.update(&response) {
+        warn!("Invalid scrapbook: {err}");
+        return Ok(vec![]);
+    }
+    let Some(scrapbook) = gs.character.scrapbook.take() else {
         return Ok(vec![]);
     };
 
