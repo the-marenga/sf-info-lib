@@ -12,8 +12,8 @@ use crate::{
     },
     error::SFSError,
     types::{
-        DetailedServerInfo, GetHofPlayersArgs, HofPlayerInfo,
-        ServerClassDistributions, ServerInfo, ServerLevels,
+        DetailedServerInfo, GetGuildHistoryArgs, GetHofPlayersArgs,
+        HofPlayerInfo, ServerClassDistributions, ServerInfo, ServerLevels,
     },
 };
 
@@ -210,11 +210,10 @@ pub async fn get_class_distribution(
 }
 
 pub async fn get_player_guild_history(
-    server_url: String,
-    player_names: &[String],
+    GetGuildHistoryArgs { server, players }: GetGuildHistoryArgs,
 ) -> Result<HashMap<String, Vec<(String, chrono::NaiveDateTime)>>, SFSError> {
     let db = get_db().await?;
-    let server_id = get_server_id(&db, server_url).await?;
+    let server_id = get_server_id(&db, server).await?;
 
     let rows = sqlx::query!(
         r#"
@@ -229,7 +228,7 @@ pub async fn get_player_guild_history(
         ORDER BY p.name, first_seen ASC
         "#,
         server_id,
-        player_names,
+        &players,
     )
     .fetch_all(&db)
     .await?;

@@ -159,3 +159,9 @@ pub struct ClassDistribution {
     pub attributes_avg: u32,
     pub honor_avg: u32,
 }
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct GetGuildHistoryArgs {
+    pub server: String,
+    pub players: Vec<String>,
+}
