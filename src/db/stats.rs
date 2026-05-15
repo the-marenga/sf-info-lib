@@ -6,7 +6,10 @@ use tokio::sync::RwLock;
 
 use crate::{
     common::{hours, ident_to_info, url_to_info},
-    db::{CacheEntry, CacheMap, CacheSlot, HashMap, Instant, get_db},
+    db::{
+        CacheEntry, CacheMap, CacheSlot, HashMap, Instant, get_db,
+        get_server_id,
+    },
     error::SFSError,
     types::{
         DetailedServerInfo, GetHofPlayersArgs, HofPlayerInfo,
@@ -204,4 +207,42 @@ pub async fn get_class_distribution(
     let mut cache_res = RESULT_CACHE.read().await;
 
     todo!()
+}
+
+pub async fn get_player_guild_history(
+    server_url: String,
+    player_names: &[String],
+) -> Result<HashMap<String, Vec<(String, chrono::NaiveDateTime)>>, SFSError> {
+    let db = get_db().await?;
+    let server_id = get_server_id(&db, server_url).await?;
+
+    let rows = sqlx::query!(
+        r#"
+        SELECT p.name AS player_name, g.name AS guild_name, MIN(pi.fetch_time) AS first_seen
+        FROM player p
+        INNER JOIN player_info pi ON pi.player_id = p.player_id
+        LEFT JOIN guild g ON g.guild_id = pi.guild_id
+        WHERE p.server_id = $1
+          AND p.name = ANY($2)
+          AND pi.guild_id IS NOT NULL
+        GROUP BY p.player_id, p.name, pi.guild_id, g.name
+        ORDER BY p.name, first_seen ASC
+        "#,
+        server_id,
+        player_names,
+    )
+    .fetch_all(&db)
+    .await?;
+
+    let mut result: HashMap<String, Vec<_>> = HashMap::new();
+    for r in rows {
+        let Some(first_seen) = r.first_seen else {
+            continue;
+        };
+        result
+            .entry(r.player_name)
+            .or_default()
+            .push((r.guild_name, first_seen));
+    }
+    Ok(result)
 }
