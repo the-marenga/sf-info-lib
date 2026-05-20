@@ -371,6 +371,10 @@ pub fn reencode_response(response: &Response) -> Result<Vec<u8>, SFSError> {
     let mut compressor = zstd::stream::Encoder::new(Vec::new(), 3)?;
 
     for (idx, (&key, value)) in response.values().iter().enumerate() {
+        let allowed_keys = ["soldieradvice", "vipstatus"];
+        if !key.starts_with("otherplayer") || !allowed_keys.contains(&key) {
+            continue;
+        }
         if idx > 0 {
             write!(compressor, "&")?;
         }
