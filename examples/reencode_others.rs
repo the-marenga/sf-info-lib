@@ -1,7 +1,14 @@
+use std::sync::atomic::AtomicUsize;
+
+use chrono::Local;
 use futures::StreamExt;
+use sf_api::session::Response;
 use sf_info_lib::db::{crawling::*, get_db};
 use tokio::task;
-use zstd::{decode_all, encode_all};
+use zstd::decode_all;
+
+const OLD_VERSION: i16 = 4;
+const NEW_VERSION: i16 = 5;
 
 #[tokio::main]
 pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -15,13 +22,15 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?;
 
     let resp_ids: Vec<i32> = sqlx::query_scalar!(
-        "SELECT otherplayer_resp_id FROM otherplayer_resp WHERE version < 3"
+        "SELECT otherplayer_resp_id FROM otherplayer_resp WHERE version = $1",
+        OLD_VERSION
     )
     .fetch_all(&db)
     .await?;
 
     let bar = indicatif::ProgressBar::new(resp_ids.len() as u64);
 
+    static TOTAL: AtomicUsize = AtomicUsize::new(0);
     futures::stream::iter(resp_ids)
         .for_each_concurrent(8, |old_id| {
             let db = db.clone();
@@ -32,8 +41,9 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let response = sqlx::query_scalar!(
                         "SELECT otherplayer_resp
                         FROM otherplayer_resp
-                        WHERE otherplayer_resp_id = $1 AND version < 3",
-                        old_id
+                        WHERE otherplayer_resp_id = $1 AND version = $2",
+                        old_id,
+                        OLD_VERSION
                     )
                     .fetch_optional(&db)
                     .await?;
@@ -41,29 +51,24 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let Some(response) = response else {
                         return Ok(());
                     };
+                    let old_size = response.len();
 
                     let decoded = task::spawn_blocking(move || {
                         decode_all(response.as_slice())
                     })
                     .await??;
                     let decoded = String::from_utf8(decoded)?;
-                    let (otherplayer, equipment) =
-                        match decoded.split_once(STORED_SPLIT_CHAR) {
-                            Some(r) => r,
-                            None => (decoded.as_str(), ""),
-                        };
-                    let data: Result<Vec<i64>, _> = otherplayer
-                        .trim()
-                        .split('/')
-                        .map(|a| a.trim().parse())
-                        .collect();
-                    let data = data?;
+                    let response =
+                        Response::parse(decoded, Local::now().naive_local())?;
 
-                    let new_raw_resp = reencode_response(&data, equipment)?;
-                    let resp = task::spawn_blocking(move || {
-                        encode_all(new_raw_resp.as_bytes(), 3)
-                    })
-                    .await??;
+                    let resp = reencode_response(&response)?;
+
+                    let nv = TOTAL.fetch_add(
+                        old_size.saturating_sub(resp.len()),
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
+                    bar.println(format!("{old_size} => {}, total: {}", resp.len(), nv));
+
 
                     let mut tx = db.begin().await?;
                     let response_id = sqlx::query_scalar!(
@@ -80,9 +85,10 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             sqlx::query_scalar!(
                                 "INSERT INTO otherplayer_resp
                                 (otherplayer_resp, version)
-                            VALUES ($1, 3)
-                            RETURNING otherplayer_resp_id",
+                                VALUES ($1, $2)
+                                RETURNING otherplayer_resp_id",
                                 &resp,
+                                NEW_VERSION
                             )
                             .fetch_one(&mut *tx)
                             .await?
