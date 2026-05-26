@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    io::{BufReader, Read},
     sync::{Arc, LazyLock},
     time::Instant,
 };
@@ -24,14 +25,12 @@ use crate::{
 // ── Delta+Varint compressed sorted integer array ──
 
 /// Stores a sorted array of `i32` values using delta encoding + varint
-/// compression.
+/// compression, wrapped in zstd.
 ///
 /// Memory layout:
 /// - `first`: the first (minimum) value
-/// - `data`: varint-encoded deltas between consecutive values
+/// - `data`: zstd-compressed varint-encoded deltas
 /// - `len`: total number of elements
-///
-/// Typical compression: ~2 bytes per entry (vs 4 for raw `i32`).
 #[derive(Debug, Clone)]
 pub struct DeltaVarintArray {
     data: Box<[u8]>,
@@ -57,8 +56,12 @@ impl DeltaVarintArray {
             encode_varint(delta, &mut encoded);
             prev = v as u64;
         }
+
+        let compressed =
+            zstd::encode_all(&encoded[..], 3).expect("zstd compression failed");
+
         Self {
-            data: encoded.into_boxed_slice(),
+            data: compressed.into_boxed_slice(),
             first,
             len: values.len() as u32,
         }
@@ -71,14 +74,18 @@ impl DeltaVarintArray {
             return result;
         }
         result.push(self.first);
+        if self.len == 1 {
+            return result;
+        }
+
+        let mut decoder = zstd::stream::read::Decoder::new(&self.data[..])
+            .expect("zstd decoder failed");
         let mut current = self.first as u64;
-        let mut pos = 0;
-        while pos < self.data.len() {
-            let (delta, bytes) =
-                decode_varint(self.data.get(pos..).unwrap_or_default());
+        for _ in 1..self.len {
+            let delta =
+                decode_varint_from_read(&mut decoder).expect("varint decode");
             current = current.wrapping_add(delta);
             result.push(current as i32);
-            pos += bytes;
         }
         result
     }
@@ -98,9 +105,13 @@ impl DeltaVarintArray {
     /// Iterate over the decompressed values (lazy, no allocation).
     #[allow(clippy::iter_without_into_iter)]
     pub(crate) fn iter(&self) -> DeltaVarintIter<'_> {
+        let decoder = (self.len > 1).then(|| {
+            zstd::stream::read::Decoder::new(&self.data[..])
+                .expect("zstd decoder failed")
+        });
+
         DeltaVarintIter {
-            data: &self.data,
-            pos: 0,
+            decoder,
             current: self.first as u64,
             remaining: self.len as usize,
         }
@@ -109,8 +120,7 @@ impl DeltaVarintArray {
 
 /// Lazy iterator over a `DeltaVarintArray`.
 pub(crate) struct DeltaVarintIter<'a> {
-    data: &'a [u8],
-    pos: usize,
+    decoder: Option<zstd::stream::read::Decoder<'a, BufReader<&'a [u8]>>>,
     current: u64,
     remaining: usize,
 }
@@ -125,10 +135,10 @@ impl Iterator for DeltaVarintIter<'_> {
         let result = self.current as i32;
         self.remaining -= 1;
         if self.remaining > 0 {
-            let (delta, bytes_read) =
-                decode_varint(self.data.get(self.pos..).unwrap_or_default());
+            let decoder = self.decoder.as_mut().expect("missing decoder");
+            let delta =
+                decode_varint_from_read(decoder).expect("varint decode failed");
             self.current = self.current.wrapping_add(delta);
-            self.pos += bytes_read;
         }
         Some(result)
     }
@@ -149,20 +159,21 @@ fn encode_varint(mut value: u64, buf: &mut Vec<u8>) {
     }
 }
 
-fn decode_varint(buf: &[u8]) -> (u64, usize) {
+fn decode_varint_from_read<R: Read>(mut reader: R) -> std::io::Result<u64> {
     let mut result = 0u64;
     let mut shift = 0;
-    let mut bytes_read = 0;
-    for &byte in buf {
-        bytes_read += 1;
-        result |= u64::from(byte & 0x7F) << shift;
-        if byte & 0x80 == 0 {
+    loop {
+        let mut byte = [0u8; 1];
+        reader.read_exact(&mut byte)?;
+        let b = byte[0];
+        result |= u64::from(b & 0x7F) << shift;
+        if b & 0x80 == 0 {
             break;
         }
         shift += 7;
         assert!(shift <= 63, "varint too long");
     }
-    (result, bytes_read)
+    Ok(result)
 }
 
 // ── Scrapbook data structures ──
@@ -471,4 +482,37 @@ async fn find_best(
             })
         })
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_delta_varint_array() {
+        let values = vec![10, 20, 30, 100, 1000, 10000];
+        let array = DeltaVarintArray::from_sorted(&values);
+        assert_eq!(array.len(), values.len());
+        assert_eq!(array.to_vec(), values);
+        assert_eq!(array.iter().collect::<Vec<_>>(), values);
+    }
+
+    #[test]
+    fn test_delta_varint_array_empty() {
+        let values: Vec<i32> = vec![];
+        let array = DeltaVarintArray::from_sorted(&values);
+        assert_eq!(array.len(), 0);
+        assert!(array.is_empty());
+        assert_eq!(array.to_vec(), values);
+        assert_eq!(array.iter().collect::<Vec<_>>(), values);
+    }
+
+    #[test]
+    fn test_delta_varint_array_single() {
+        let values = vec![42];
+        let array = DeltaVarintArray::from_sorted(&values);
+        assert_eq!(array.len(), 1);
+        assert_eq!(array.to_vec(), values);
+        assert_eq!(array.iter().collect::<Vec<_>>(), values);
+    }
 }
